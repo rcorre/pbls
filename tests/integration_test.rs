@@ -347,7 +347,7 @@ fn test_diagnostics_on_open() -> pbls::Result<()> {
     assert_elements_equal(
         diags.diagnostics,
         vec![
-            diag(error_uri(), "Unknown t =", "\"Unknown\" is not defined."),
+            diag(error_uri(), "Unknown t =", "\"Unknown\" is not defined"),
             diag(
                 error_uri(),
                 "int32 bar =",
