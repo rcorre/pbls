@@ -14,9 +14,17 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    env:
+      RUST_LOG: pbls=trace
+
     steps:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
+    - name: Install protoc
+      run: |
+        curl https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-linux-x86_64.zip -Lo /tmp/protoc.zip
+        unzip /tmp/protoc.zip
+        bin/protoc --version
     - name: Run tests
-      run: cargo test --verbose
+      run: PATH="$PATH:bin/" cargo test --verbose
