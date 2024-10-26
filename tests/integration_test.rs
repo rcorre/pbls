@@ -786,6 +786,107 @@ fn test_complete_keyword() -> pbls::Result<()> {
 }
 
 #[test]
+fn test_complete_type_after_adding_import() -> pbls::Result<()> {
+    let mut client = TestClient::new()?;
+    client.open(other_uri())?;
+
+    // insert an import
+    let pos = locate_sym(other_uri(), "package other;").range.start;
+    let pos = Position {
+        line: pos.line + 1,
+        character: 0,
+    };
+    let change = TextDocumentContentChangeEvent {
+        text: "import \"folder/stuff.proto\";".into(),
+        range: Some(lsp_types::Range {
+            start: pos,
+            end: pos,
+        }),
+        range_length: None,
+    };
+    client.notify::<DidChangeTextDocument>(DidChangeTextDocumentParams {
+        text_document: lsp_types::VersionedTextDocumentIdentifier {
+            uri: other_uri().clone(),
+            version: 0,
+        },
+        content_changes: vec![change],
+    })?;
+
+    let pos = locate_sym(other_uri(), "int32 i = 1;").range.start;
+    let resp = client.request::<Completion>(completion_params(
+        other_uri(),
+        Position {
+            line: pos.line,
+            character: 6,
+        },
+    ))?;
+
+    let Some(lsp_types::CompletionResponse::Array(actual)) = resp else {
+        panic!("Unexpected completion response {resp:?}");
+    };
+
+    let keyword = |name: &str| CompletionItem {
+        label: name.into(),
+        kind: Some(CompletionItemKind::KEYWORD),
+        ..Default::default()
+    };
+
+    let _struct = |name: &str| CompletionItem {
+        label: name.into(),
+        kind: Some(CompletionItemKind::STRUCT),
+        ..Default::default()
+    };
+
+    let _enum = |name: &str| CompletionItem {
+        label: name.into(),
+        kind: Some(CompletionItemKind::ENUM),
+        ..Default::default()
+    };
+
+    assert_elements_equal(
+        actual,
+        vec![
+            keyword("enum"),
+            keyword("extend"),
+            keyword("import"),
+            keyword("map"),
+            keyword("message"),
+            keyword("oneof"),
+            keyword("option"),
+            keyword("optional"),
+            keyword("package"),
+            keyword("repeated"),
+            keyword("reserved"),
+            keyword("returns"),
+            keyword("rpc"),
+            keyword("service"),
+            keyword("stream"),
+            _struct("bool"),
+            _struct("bytes"),
+            _struct("double"),
+            _struct("fixed32"),
+            _struct("fixed64"),
+            _struct("float"),
+            _struct("int32"),
+            _struct("int64"),
+            _struct("sfixed32"),
+            _struct("sfixed64"),
+            _struct("sint32"),
+            _struct("sint64"),
+            _struct("string"),
+            _struct("uint32"),
+            _struct("uint64"),
+            _struct("Other"),
+            _struct("Nested"),
+            _struct("folder.stuff.Stuff"),
+        ],
+        |s| s.label.clone(),
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_complete_type() -> pbls::Result<()> {
     let mut client = TestClient::new()?;
     client.open(base_uri())?;

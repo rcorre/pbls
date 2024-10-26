@@ -108,12 +108,22 @@ impl Workspace {
         uri: &Url,
         changes: Vec<lsp_types::TextDocumentContentChangeEvent>,
     ) -> Result<()> {
-        log::trace!("edit");
-        self.files
+        log::trace!("Editing {uri:?}");
+        let file = self
+            .files
             .get_mut(uri)
-            .ok_or(format!("File not loaded: {uri}"))?
-            .edit(changes)
-            .into()
+            .ok_or(format!("File not loaded: {uri}"))?;
+        file.edit(changes)?;
+
+        let mut qc = tree_sitter::QueryCursor::new();
+        let imports = Vec::from_iter(file.imports(&mut qc).map(str::to_string));
+
+        for import in imports {
+            log::trace!("Loading new import {import:?}");
+            self.open_import(import.as_str())?;
+        }
+
+        Ok(())
     }
 
     pub fn symbols(&self, uri: &Url) -> Result<Vec<SymbolInformation>> {
