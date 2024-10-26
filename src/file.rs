@@ -326,16 +326,36 @@ impl File {
         match item {
             GotoContext::Type(typ) => {
                 static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+                let typ = typ.name;
+                let pkg = self.package();
                 let query = QUERY.get_or_init(|| {
                     tree_sitter::Query::new(language(), "(field (type) @name)").unwrap()
                 });
+                log::trace!("Searching for references to {typ} in package {pkg:?}");
 
                 let mut qc = tree_sitter::QueryCursor::new();
                 qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
                     .map(|m| m.captures[0].node)
-                    .inspect(|x| eprintln!("Check {x:?}: {} == {typ:?}", self.get_text(*x)))
-                    .filter(|n| self.get_text(*n) == typ.name)
-                    .map(|n| n.range())
+                    .inspect(|x| log::trace!("Check {x:?}: {} == {typ}", self.get_text(*x)))
+                    .filter(|node| {
+                        let text = self.get_text(*node);
+                        // first check the fully qualified name
+                        text == typ
+                            || match pkg {
+                                // If we have a package, try stripping that, in case we're in the same package
+                                Some(pkg) => {
+                                    log::trace!(
+                                        "Trying to match '{typ}' to '{text}' without package {pkg}"
+                                    );
+                                    typ.strip_prefix(pkg)
+                                        .and_then(|typ| typ.strip_prefix("."))
+                                        .map(|target| target == text)
+                                        .unwrap_or(false)
+                                }
+                                None => false,
+                            }
+                    })
+                    .map(|node| node.range())
                     .collect()
             }
             GotoContext::Import(name) => {
@@ -343,7 +363,6 @@ impl File {
                 let query = QUERY.get_or_init(|| {
                     tree_sitter::Query::new(language(), "(import (strLit) @name)").unwrap()
                 });
-                eprintln!("query");
 
                 let mut qc = tree_sitter::QueryCursor::new();
                 qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
@@ -986,11 +1005,13 @@ mod tests {
         let file = File::new(
             [
                 "syntax = \"proto3\";",
+                "package thing;",
                 "import \"foo.proto\";",
                 "import \"bar.proto\";",
                 "message Foo {",
                 "    Bar b = 1;",
                 "    Biz.Buz bb = 2;",
+                "    buf.Buf buf = 3;",
                 "}",
                 "",
             ]
@@ -1001,20 +1022,20 @@ mod tests {
         assert_eq!(
             file.references(&GotoContext::Import("foo.proto")),
             vec![tree_sitter::Range {
-                start_byte: 26,
-                end_byte: 37,
-                start_point: Point { row: 1, column: 7 },
-                end_point: Point { row: 1, column: 18 }
+                start_byte: 41,
+                end_byte: 52,
+                start_point: Point { row: 2, column: 7 },
+                end_point: Point { row: 2, column: 18 }
             }]
         );
 
         assert_eq!(
             file.references(&GotoContext::Import("bar.proto")),
             vec![tree_sitter::Range {
-                start_byte: 46,
-                end_byte: 57,
-                start_point: Point { row: 2, column: 7 },
-                end_point: Point { row: 2, column: 18 }
+                start_byte: 61,
+                end_byte: 72,
+                start_point: Point { row: 3, column: 7 },
+                end_point: Point { row: 3, column: 18 }
             }]
         );
 
@@ -1022,28 +1043,57 @@ mod tests {
 
         assert_eq!(
             file.references(&GotoContext::Type(GotoTypeContext {
-                name: "Bar",
+                name: "thing.Bar",
                 parent: None
             })),
             vec![tree_sitter::Range {
-                start_byte: 77,
-                end_byte: 80,
-                start_point: Point { row: 4, column: 4 },
-                end_point: Point { row: 4, column: 7 }
+                start_byte: 92,
+                end_byte: 95,
+                start_point: Point { row: 5, column: 4 },
+                end_point: Point { row: 5, column: 7 }
             }]
         );
 
         assert_eq!(
             file.references(&GotoContext::Type(GotoTypeContext {
-                name: "Biz.Buz",
+                name: "thing.Biz.Buz",
                 parent: None
             })),
             vec![tree_sitter::Range {
-                start_byte: 92,
-                end_byte: 99,
-                start_point: Point { row: 5, column: 4 },
-                end_point: Point { row: 5, column: 11 }
+                start_byte: 107,
+                end_byte: 114,
+                start_point: Point { row: 6, column: 4 },
+                end_point: Point { row: 6, column: 11 }
             }]
+        );
+
+        assert_eq!(
+            file.references(&GotoContext::Type(GotoTypeContext {
+                name: "buf.Buf",
+                parent: None
+            })),
+            vec![tree_sitter::Range {
+                start_byte: 127,
+                end_byte: 134,
+                start_point: Point { row: 7, column: 4 },
+                end_point: Point { row: 7, column: 11 }
+            }]
+        );
+
+        assert_eq!(
+            file.references(&GotoContext::Type(GotoTypeContext {
+                name: "Buf",
+                parent: None
+            })),
+            vec![]
+        );
+
+        assert_eq!(
+            file.references(&GotoContext::Type(GotoTypeContext {
+                name: "buf",
+                parent: None
+            })),
+            vec![]
         );
     }
 

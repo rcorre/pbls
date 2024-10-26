@@ -674,6 +674,30 @@ fn test_message_references() -> pbls::Result<()> {
 }
 
 #[test]
+fn test_message_references_cross_module() -> pbls::Result<()> {
+    let mut client = TestClient::new()?;
+    client.open(base_uri())?;
+
+    assert_eq!(
+        client.request::<lsp_types::request::References>(lsp_types::ReferenceParams {
+            text_document_position: position(base_uri(), "message Foo", 9),
+            work_done_progress_params: lsp_types::WorkDoneProgressParams {
+                work_done_token: None,
+            },
+            partial_result_params: lsp_types::PartialResultParams {
+                partial_result_token: None
+            },
+            context: lsp_types::ReferenceContext {
+                include_declaration: false,
+            },
+        })?,
+        Some(vec![locate(base_uri(), "|Foo| f = 1")])
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_complete_import() -> pbls::Result<()> {
     let mut client = TestClient::new()?;
     client.open(base_uri())?;
