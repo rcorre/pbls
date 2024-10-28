@@ -2,6 +2,9 @@
 
 `pbls` is a [Language Server](https://microsoft.github.io/language-server-protocol/) for [protobuf](https://protobuf.dev/).
 
+`pbls` was originally hosted at https://git.sr.ht/~rrc/pbls, but was moved to https://github.com/rcorre/pbls ease contribution.
+The sourcehut repo is maintained as a mirror.
+
 # Features
 
 - Diagnostics (from `protoc`)
@@ -17,7 +20,7 @@ Ensure [`protoc`](https://github.com/protocolbuffers/protobuf#protobuf-compiler-
 # Installation
 
 ```
-cargo install --git https://git.sr.ht/~rrc/pbls
+cargo install --git https://github.com/rcorre/pbls
 ```
 
 Ensure the cargo binary path (usually `~/.cargo/bin`) is on `$PATH`.
@@ -59,6 +62,17 @@ name = "protobuf"
 language-servers = ['pbls']
 # Unrelated to pbls, you may want to use clang-format as a formatter
 formatter = { command = "clang-format" , args = ["--assume-filename=a.proto"]}
+```
+
+You can also enable `pbls` in other languages, allowing you to search for protobuf messages without having a protobuf file open:
+
+```toml
+# ~/.config/helix/languages.toml
+
+# Search for protobuf symbols in C++ files using <space>S
+[[language]]
+name = "cpp"
+language-servers = [ "clangd", { name = "pbls", only-features = ["workspace-symbols"] } ]
 ```
 
 # Similar Projects
