@@ -322,56 +322,55 @@ impl File {
         })
     }
 
-    pub fn references(self: &Self, item: &GotoContext) -> Vec<tree_sitter::Range> {
-        match item {
-            GotoContext::Type(typ) => {
-                static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
-                let typ = typ.name;
-                let pkg = self.package();
-                let query = QUERY.get_or_init(|| {
-                    tree_sitter::Query::new(language(), "(field (type) @name)").unwrap()
-                });
-                log::trace!("Searching for references to {typ} in package {pkg:?}");
+    pub fn type_references(
+        self: &Self,
+        pkg: Option<&str>,
+        typ: &GotoTypeContext,
+    ) -> Vec<tree_sitter::Range> {
+        static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+        let query = QUERY
+            .get_or_init(|| tree_sitter::Query::new(language(), "(field (type) @name)").unwrap());
+        let typ = typ.name;
+        log::trace!("Searching for references to {typ} in package {pkg:?}");
 
-                let mut qc = tree_sitter::QueryCursor::new();
-                qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
-                    .map(|m| m.captures[0].node)
-                    .inspect(|x| log::trace!("Check {x:?}: {} == {typ}", self.get_text(*x)))
-                    .filter(|node| {
-                        let text = self.get_text(*node);
-                        // first check the fully qualified name
-                        text == typ
-                            || match pkg {
-                                // If we have a package, try stripping that, in case we're in the same package
-                                Some(pkg) => {
-                                    log::trace!(
-                                        "Trying to match '{typ}' to '{text}' without package {pkg}"
-                                    );
-                                    typ.strip_prefix(pkg)
-                                        .and_then(|typ| typ.strip_prefix("."))
-                                        .map(|target| target == text)
-                                        .unwrap_or(false)
-                                }
-                                None => false,
-                            }
-                    })
-                    .map(|node| node.range())
-                    .collect()
-            }
-            GotoContext::Import(name) => {
-                static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
-                let query = QUERY.get_or_init(|| {
-                    tree_sitter::Query::new(language(), "(import (strLit) @name)").unwrap()
-                });
+        let mut qc = tree_sitter::QueryCursor::new();
+        qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
+            .map(|m| m.captures[0].node)
+            .inspect(|x| log::trace!("Check {x:?}: {} == {typ}", self.get_text(*x)))
+            .filter(|node| {
+                let text = self.get_text(*node);
+                // first check the fully qualified name
+                text == typ
+                    || match pkg {
+                        // If we have a package, try stripping that, in case we're in the same package
+                        Some(pkg) => {
+                            log::trace!(
+                                "Trying to match '{typ}' to '{text}' without package {pkg}"
+                            );
+                            text.strip_prefix(pkg)
+                                .and_then(|text| text.strip_prefix("."))
+                                .map(|text| typ == text)
+                                .unwrap_or(false)
+                        }
+                        None => false,
+                    }
+            })
+            .map(|node| node.range())
+            .collect()
+    }
 
-                let mut qc = tree_sitter::QueryCursor::new();
-                qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
-                    .map(|m| m.captures[0].node)
-                    .filter(|n| self.get_text(*n).trim_matches('"') == *name)
-                    .map(|n| n.range())
-                    .collect()
-            }
-        }
+    pub fn import_references(self: &Self, file: &str) -> Vec<tree_sitter::Range> {
+        static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+        let query = QUERY.get_or_init(|| {
+            tree_sitter::Query::new(language(), "(import (strLit) @name)").unwrap()
+        });
+
+        let mut qc = tree_sitter::QueryCursor::new();
+        qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
+            .map(|m| m.captures[0].node)
+            .filter(|n| self.get_text(*n).trim_matches('"') == file)
+            .map(|n| n.range())
+            .collect()
     }
 
     pub fn type_at(self: &Self, row: usize, col: usize) -> Option<GotoContext> {
@@ -1000,7 +999,7 @@ mod tests {
     }
 
     #[test]
-    fn test_references() {
+    fn test_import_references() {
         let _ = env_logger::builder().is_test(true).try_init();
         let file = File::new(
             [
@@ -1020,7 +1019,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            file.references(&GotoContext::Import("foo.proto")),
+            file.import_references("foo.proto"),
             vec![tree_sitter::Range {
                 start_byte: 41,
                 end_byte: 52,
@@ -1030,7 +1029,7 @@ mod tests {
         );
 
         assert_eq!(
-            file.references(&GotoContext::Import("bar.proto")),
+            file.import_references("bar.proto"),
             vec![tree_sitter::Range {
                 start_byte: 61,
                 end_byte: 72,
@@ -1039,13 +1038,37 @@ mod tests {
             }]
         );
 
-        assert_eq!(file.references(&GotoContext::Import("baz.proto")), vec![]);
+        assert_eq!(file.import_references("baz.proto"), vec![]);
+    }
+
+    #[test]
+    fn test_type_references() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let file = File::new(
+            [
+                "syntax = \"proto3\";",
+                "package thing;",
+                "import \"foo.proto\";",
+                "import \"bar.proto\";",
+                "message Foo {",
+                "    Bar b = 1;",
+                "    Biz.Buz bb = 2;",
+                "    buf.Buf buf = 3;",
+                "}",
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
 
         assert_eq!(
-            file.references(&GotoContext::Type(GotoTypeContext {
-                name: "thing.Bar",
-                parent: None
-            })),
+            file.type_references(
+                None,
+                &GotoTypeContext {
+                    name: "Bar",
+                    parent: None
+                }
+            ),
             vec![tree_sitter::Range {
                 start_byte: 92,
                 end_byte: 95,
@@ -1055,10 +1078,13 @@ mod tests {
         );
 
         assert_eq!(
-            file.references(&GotoContext::Type(GotoTypeContext {
-                name: "thing.Biz.Buz",
-                parent: None
-            })),
+            file.type_references(
+                Some("thing"),
+                &GotoTypeContext {
+                    name: "Biz.Buz",
+                    parent: None
+                }
+            ),
             vec![tree_sitter::Range {
                 start_byte: 107,
                 end_byte: 114,
@@ -1068,10 +1094,13 @@ mod tests {
         );
 
         assert_eq!(
-            file.references(&GotoContext::Type(GotoTypeContext {
-                name: "buf.Buf",
-                parent: None
-            })),
+            file.type_references(
+                Some("buf"),
+                &GotoTypeContext {
+                    name: "Buf",
+                    parent: None
+                }
+            ),
             vec![tree_sitter::Range {
                 start_byte: 127,
                 end_byte: 134,
@@ -1081,18 +1110,24 @@ mod tests {
         );
 
         assert_eq!(
-            file.references(&GotoContext::Type(GotoTypeContext {
-                name: "Buf",
-                parent: None
-            })),
+            file.type_references(
+                Some("thing"),
+                &GotoTypeContext {
+                    name: "Buf",
+                    parent: None
+                }
+            ),
             vec![]
         );
 
         assert_eq!(
-            file.references(&GotoContext::Type(GotoTypeContext {
-                name: "buf",
-                parent: None
-            })),
+            file.type_references(
+                Some("thing"),
+                &GotoTypeContext {
+                    name: "buf",
+                    parent: None
+                }
+            ),
             vec![]
         );
     }

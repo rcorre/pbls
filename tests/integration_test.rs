@@ -36,6 +36,10 @@ fn error_uri() -> Url {
     Url::from_file_path(std::fs::canonicalize("./testdata/error.proto").unwrap()).unwrap()
 }
 
+fn stuff_uri() -> Url {
+    Url::from_file_path(std::fs::canonicalize("./testdata/folder/stuff.proto").unwrap()).unwrap()
+}
+
 fn diag(uri: Url, target: &str, message: &str) -> Diagnostic {
     Diagnostic {
         range: locate_sym(uri, target).range,
@@ -516,7 +520,7 @@ fn test_workspace_symbols() -> pbls::Result<()> {
             sym(error_uri(), "Nope", "enum Nope"),
             sym(error_uri(), "Nah", "message Nah"),
             sym(error_uri(), "Noo", "message Noo"),
-            // sym(stuff_uri(), "Stuff", "message Stuff"), BUG: should find nested symbols
+            sym(stuff_uri(), "Stuff", "message Stuff"),
         ],
     );
 
@@ -674,7 +678,7 @@ fn test_message_references() -> pbls::Result<()> {
 }
 
 #[test]
-fn test_message_references_cross_module() -> pbls::Result<()> {
+fn test_message_references_cross_package() -> pbls::Result<()> {
     let mut client = TestClient::new()?;
     client.open(other_uri())?;
 
@@ -691,8 +695,7 @@ fn test_message_references_cross_module() -> pbls::Result<()> {
                 include_declaration: false,
             },
         })?,
-        // TODO: fix cross-module references
-        Some(vec![]),
+        Some(vec![locate(base_uri(), "|other.Other| other = 2")]),
     );
 
     Ok(())

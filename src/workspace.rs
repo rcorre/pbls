@@ -135,7 +135,8 @@ impl Workspace {
             .collect())
     }
 
-    pub fn all_symbols(&mut self, query: &str) -> Result<Vec<SymbolInformation>> {
+    fn load_all(&mut self) -> Result<()> {
+        log::debug!("Loading all files");
         let paths = self
             .proto_paths
             .iter()
@@ -144,9 +145,32 @@ impl Workspace {
             .filter_map(|p| p.ok())
             .map(|f| f.path())
             .filter(|p| p.is_file() && p.extension().map_or(false, |e| e == "proto"))
-            .map(|p| std::fs::canonicalize(p));
-        let mut res = vec![];
-        let mut qc = tree_sitter::QueryCursor::new();
+            .filter_map(|p| match std::fs::canonicalize(&p) {
+                Ok(p) => Some(p),
+                Err(err) => {
+                    log::error!("Failed to open '{p:?}': {err:?}");
+                    None
+                }
+            });
+
+        for path in paths {
+            log::debug!("Loading {path:?}");
+            let uri = Url::from_file_path(&path).or(Err(format!("Invalid path: {path:?}")))?;
+            if let Some(file) = self.files.get(&uri) {
+                file
+            } else {
+                let text = std::fs::read_to_string(uri.path())?;
+                let file = file::File::new(text)?;
+                self.files.insert(uri.clone(), file);
+                self.files.get(&uri).unwrap()
+            };
+        }
+
+        Ok(())
+    }
+
+    pub fn all_symbols(&mut self, query: &str) -> Result<Vec<SymbolInformation>> {
+        self.load_all()?;
 
         let regexes: std::result::Result<Vec<_>, _> = query
             .split_whitespace()
@@ -164,17 +188,9 @@ impl Workspace {
         let regexes = regexes?;
         log::debug!("Searching workspace symbols with patterns: {regexes:?}");
 
-        for path in paths {
-            let path = path?;
-            let uri = Url::from_file_path(&path).or(Err(format!("Invalid path: {path:?}")))?;
-            let file = if let Some(file) = self.files.get(&uri) {
-                file
-            } else {
-                let text = std::fs::read_to_string(uri.path())?;
-                let file = file::File::new(text)?;
-                self.files.insert(uri.clone(), file);
-                self.files.get(&uri).unwrap()
-            };
+        let mut res = vec![];
+        let mut qc = tree_sitter::QueryCursor::new();
+        for (uri, file) in &self.files {
             let symbols = file.symbols(&mut qc);
             let syms = symbols
                 .filter(|s| regexes.iter().all(|r| r.is_match(&s.name)))
@@ -228,7 +244,6 @@ impl Workspace {
     }
 
     // Return the relative paths of proto files under the given dir.
-
     pub fn goto(&self, uri: Url, pos: lsp_types::Position) -> Result<Option<lsp_types::Location>> {
         let file = self.get(&uri)?;
         let ctx = file.type_at(pos.line.try_into()?, pos.character.try_into()?);
@@ -247,11 +262,14 @@ impl Workspace {
     }
 
     pub fn references(
-        &self,
+        &mut self,
         params: lsp_types::ReferenceParams,
     ) -> Result<Option<Vec<lsp_types::Location>>> {
+        self.load_all()?;
+
         let doc = params.text_document_position;
-        let file = self.get(&doc.text_document.uri)?;
+        let uri = &doc.text_document.uri;
+        let file = self.get(&uri)?;
 
         let Some(item) = file.type_at(
             doc.position.line.try_into()?,
@@ -261,16 +279,34 @@ impl Workspace {
         };
 
         let mut res = Vec::new();
-        for (uri, file) in self.files.iter() {
-            res.extend(
-                file.references(&item)
-                    .iter()
-                    .map(|range| lsp_types::Location {
-                        uri: uri.clone(),
-                        range: to_lsp_range(*range),
-                    }),
-            );
-        }
+        match &item {
+            file::GotoContext::Type(t) => {
+                let src = self
+                    .find_symbol(uri.clone(), file, &t)?
+                    .ok_or("Symbol not found: {t:?}")?;
+                let src = self.get(&src.uri)?;
+                let pkg = src.package();
+                for (uri, file) in self.files.iter() {
+                    res.extend(file.type_references(pkg, t).iter().map(|range| {
+                        lsp_types::Location {
+                            uri: uri.clone(),
+                            range: to_lsp_range(*range),
+                        }
+                    }));
+                }
+            }
+            file::GotoContext::Import(import) => {
+                for (uri, file) in self.files.iter() {
+                    res.extend(file.import_references(import).iter().map(|range| {
+                        lsp_types::Location {
+                            uri: uri.clone(),
+                            range: to_lsp_range(*range),
+                        }
+                    }));
+                }
+            }
+        };
+
         Ok(Some(res))
     }
 
