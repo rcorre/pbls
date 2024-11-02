@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package folder.what;
+
+import "folder/stuff.proto";
+
+message What{
+    stuff.Stuff stuff = 1;
+}
+

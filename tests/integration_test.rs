@@ -749,11 +749,10 @@ fn test_complete_import() -> pbls::Result<()> {
                 insert_text: Some("error.proto\";".into()),
                 ..Default::default()
             },
-            // BUG: Should be excluded
             CompletionItem {
-                label: "folder/stuff.proto".into(),
+                label: "folder/what.proto".into(),
                 kind: Some(CompletionItemKind::FILE),
-                insert_text: Some("folder/stuff.proto\";".into()),
+                insert_text: Some("folder/what.proto\";".into()),
                 ..Default::default()
             },
         ],

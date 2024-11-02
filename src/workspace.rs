@@ -476,9 +476,10 @@ impl Workspace {
         let items = self
             .proto_paths
             .iter()
-            .map(|p| find_protos(p.as_path(), &existing))
+            .map(|p| find_protos(p.as_path()))
             .flat_map(|p| {
                 p.iter()
+                    .filter(|s| !existing.contains(&s.as_str()))
                     .map(|s| lsp_types::CompletionItem {
                         insert_text: Some(format!("{}\";", s)),
                         label: s.to_owned(),
@@ -493,7 +494,7 @@ impl Workspace {
     }
 }
 
-fn find_protos(dir: &std::path::Path, excludes: &Vec<&str>) -> Vec<String> {
+fn find_protos(dir: &std::path::Path) -> Vec<String> {
     let mut res = vec![];
     let entries = match std::fs::read_dir(dir) {
         Ok(ok) => ok,
@@ -522,7 +523,7 @@ fn find_protos(dir: &std::path::Path, excludes: &Vec<&str>) -> Vec<String> {
 
         if meta.is_dir() {
             let dir = dir.join(path.path());
-            let protos = find_protos(dir.as_path(), excludes);
+            let protos = find_protos(dir.as_path());
             let root = &path.file_name();
             let root = std::path::PathBuf::from(root);
             res.extend(
@@ -546,10 +547,8 @@ fn find_protos(dir: &std::path::Path, excludes: &Vec<&str>) -> Vec<String> {
             continue;
         }
 
-        if !excludes.contains(&name) {
-            log::trace!("Found import {name:?}");
-            res.push(name.to_string())
-        }
+        log::trace!("Found import {name:?}");
+        res.push(name.to_string())
     }
     res
 }
