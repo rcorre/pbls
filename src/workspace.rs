@@ -37,6 +37,54 @@ pub struct Workspace {
     files: std::collections::HashMap<Url, file::File>,
 }
 
+// Return the possible package qualifiers to_pkg could use for a type imported from from_pkg
+fn possible_qualifiers<'a>(from_pkg: &'a str, to_pkg: &'a str) -> Vec<&'a str> {
+    log::trace!("possible_qualifiers({from_pkg}, {to_pkg})");
+    if to_pkg == "" {
+        return vec![from_pkg];
+    }
+
+    let mut res = vec![];
+    if let Some(pkg) = from_pkg.strip_prefix(to_pkg) {
+        let pkg = pkg.strip_prefix(".").unwrap_or(pkg);
+        res.push(pkg);
+    }
+
+    if let Some((to_pkg, _)) = to_pkg.rsplit_once(".") {
+        res.append(&mut possible_qualifiers(from_pkg, to_pkg));
+    } else {
+        res.push(from_pkg);
+    }
+    return res;
+}
+
+#[test]
+fn test_possible_qualifiers() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    assert_eq!(possible_qualifiers("", ""), vec![""]);
+    assert_eq!(possible_qualifiers("foo", ""), vec!["foo"]);
+    assert_eq!(possible_qualifiers("foo.bar", ""), vec!["foo.bar"]);
+    assert_eq!(possible_qualifiers("foo", "bar"), vec!["foo"]);
+    assert_eq!(possible_qualifiers("foo.bar", "bar"), vec!["foo.bar"]);
+    assert_eq!(possible_qualifiers("foo", "foo"), vec!["", "foo"]);
+    assert_eq!(
+        possible_qualifiers("foo.bar", "foo"),
+        vec!["bar", "foo.bar"]
+    );
+    assert_eq!(
+        possible_qualifiers("foo.bar.baz", "foo.bar"),
+        vec!["baz", "bar.baz", "foo.bar.baz",]
+    );
+    assert_eq!(
+        possible_qualifiers("foo.bar.baz", "foo.bar.baz"),
+        vec!["", "baz", "bar.baz", "foo.bar.baz",]
+    );
+    assert_eq!(
+        possible_qualifiers("folder.stuff", "folder.what"),
+        vec!["stuff", "folder.stuff"]
+    );
+}
+
 impl Workspace {
     pub fn new(proto_paths: Vec<std::path::PathBuf>) -> Workspace {
         Workspace {
@@ -362,21 +410,25 @@ impl Workspace {
         for (uri, file) in imports {
             let package = file.package();
             if let Some(sym) = if package == local_package {
-                log::trace!("Searching for {} in {uri}", typ.name);
+                log::trace!("Searching for {} in {uri} (same package)", typ.name);
                 // same package, match the name without the package prefix
                 file.symbols(&mut qc).find(|sym| sym.name == typ.name)
             } else if let Some(package) = package {
+                log::trace!("Searching for {} in {uri} (different package)", typ.name);
                 // different package, fully qualify the name
-                log::trace!("Stripping {package} from {}", typ.name);
-                let qualified = typ
-                    .name
-                    .strip_prefix(package)
-                    .unwrap_or(typ.name)
-                    .strip_prefix(".")
-                    .unwrap_or(typ.name)
-                    .to_string();
-                log::trace!("Searching for {} in {uri} (different package)", qualified);
-                file.symbols(&mut qc).find(|sym| sym.name == qualified)
+                let local_package = local_package.unwrap_or("");
+                file.symbols(&mut qc).find(|sym| {
+                    let quals = possible_qualifiers(package, local_package);
+                    log::trace!("Qualifiers: {quals:?}");
+                    quals
+                        .iter()
+                        .inspect(|q| log::trace!("Qual == {q}"))
+                        .filter_map(|qual| typ.name.strip_prefix(qual))
+                        .inspect(|q| log::trace!("stripped == {q}"))
+                        .filter_map(|name| name.strip_prefix("."))
+                        .inspect(|q| log::trace!("name == {q} == {}", sym.name))
+                        .any(|name| name == sym.name)
+                })
             } else {
                 // target file has no package
                 log::trace!("Searching for {} in {uri}", typ.name);

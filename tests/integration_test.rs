@@ -40,6 +40,10 @@ fn stuff_uri() -> Url {
     Url::from_file_path(std::fs::canonicalize("./testdata/folder/stuff.proto").unwrap()).unwrap()
 }
 
+fn what_uri() -> Url {
+    Url::from_file_path(std::fs::canonicalize("./testdata/folder/what.proto").unwrap()).unwrap()
+}
+
 fn diag(uri: Url, target: &str, message: &str) -> Diagnostic {
     Diagnostic {
         range: locate_sym(uri, target).range,
@@ -647,6 +651,32 @@ fn test_goto_definition_different_file_nested() -> pbls::Result<()> {
         Some(GotoDefinitionResponse::Scalar(locate_sym(
             other_uri(),
             "message Nested",
+        )))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_goto_definition_partially_qualified_package() -> pbls::Result<()> {
+    let mut client = TestClient::new()?;
+    client.open(what_uri())?;
+
+    let resp = client.request::<GotoDefinition>(goto(what_uri(), "stuff.Stuff a =", 0))?;
+    assert_eq!(
+        resp,
+        Some(GotoDefinitionResponse::Scalar(locate_sym(
+            stuff_uri(),
+            "message Stuff",
+        )))
+    );
+
+    let resp = client.request::<GotoDefinition>(goto(what_uri(), "folder.stuff.Stuff b =", 0))?;
+    assert_eq!(
+        resp,
+        Some(GotoDefinitionResponse::Scalar(locate_sym(
+            stuff_uri(),
+            "message Stuff",
         )))
     );
 

@@ -5,6 +5,7 @@ package folder.what;
 import "folder/stuff.proto";
 
 message What{
-    stuff.Stuff stuff = 1;
+    stuff.Stuff a = 1;
+    folder.stuff.Stuff b = 2;
 }
 
