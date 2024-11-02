@@ -703,9 +703,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
         let mut ws = Workspace::new(vec![]);
         let uri = Url::from_file_path(std::env::temp_dir().join("foo.proto")).unwrap();
-        // TODO: This returns Error because protoc needs a file on disk.
-        // Replace with unwrap after errors are based on treesitter.
-        _ = ws.open(uri.clone(), "".into());
+        ws.open(uri.clone(), "".into()).unwrap();
         assert_eq!(
             ws.complete(&uri, 0, 0).unwrap().unwrap(),
             lsp_types::CompletionResponse::Array(vec![
