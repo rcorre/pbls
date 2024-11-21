@@ -6,7 +6,16 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+        include:
+          - os: windows-latest
+            extension: .exe
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
@@ -14,77 +23,41 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: linux
-          path: target/release/pbls
+          name: ${{ matrix.os }}
+          path: target/release/pbls${{ matrix.extension }}
+          if-no-files-found: error
 
-  # publish:
-  #   name: Publish
-  #   needs: [build]
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout sources
-  #       uses: actions/checkout@v4
+  publish:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
 
-  #     - uses: actions/download-artifact@v4
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-  #     - name: Build archive
-  #       shell: bash
-  #       run: |
-  #         set -ex
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir artifacts/archives
 
-  #         source="$(pwd)"
-  #         mkdir -p runtime/grammars/sources
-  #         tar xJf grammars/grammars.tar.xz -C runtime/grammars/sources
-  #         rm -rf grammars
+          cd artifacts/ubuntu-latest
+          tar cJvf "../archives/pbls-$GITHUB_REF_NAME-linux.tar.xz" pbls
 
-  #         cd "$(mktemp -d)"
-  #         mv $source/bins-* .
-  #         mkdir dist
+          cd ../macos-latest
+          tar cJvf "../archives/pbls-$GITHUB_REF_NAME-macos.tar.xz" pbls
 
-  #         for dir in bins-* ; do
-  #             platform=${dir#"bins-"}
-  #             if [[ $platform =~ "windows" ]]; then
-  #                 exe=".exe"
-  #             fi
-  #             pkgname=helix-$GITHUB_REF_NAME-$platform
-  #             mkdir -p $pkgname
-  #             cp $source/LICENSE $source/README.md $pkgname
-  #             mkdir $pkgname/contrib
-  #             cp -r $source/contrib/completion $pkgname/contrib
-  #             mv bins-$platform/runtime $pkgname/
-  #             mv bins-$platform/hx$exe $pkgname
-  #             chmod +x $pkgname/hx$exe
+          cd ../windows-latest
+          zip "../archives/pbls-$GITHUB_REF_NAME-windows.zip" pbls.exe
 
-  #             if [[ "$platform" = "x86_64-linux" ]]; then
-  #                 mv bins-$platform/helix-*.AppImage* dist/
-  #             fi
-
-  #             if [ "$exe" = "" ]; then
-  #                 tar cJf dist/$pkgname.tar.xz $pkgname
-  #             else
-  #                 7z a -r dist/$pkgname.zip $pkgname
-  #             fi
-  #         done
-
-  #         tar cJf dist/helix-$GITHUB_REF_NAME-source.tar.xz -C $source .
-  #         mv dist $source/
-
-  #     - name: Upload binaries to release
-  #       uses: svenstaro/upload-release-action@v2
-  #       if: env.preview == 'false'
-  #       with:
-  #         repo_token: ${{ secrets.GITHUB_TOKEN }}
-  #         file: dist/*
-  #         file_glob: true
-  #         tag: ${{ github.ref_name }}
-  #         overwrite: true
-      
-  #     - name: Upload binaries as artifact
-  #       uses: actions/upload-artifact@v4
-  #       if: env.preview == 'true'
-  #       with:
-  #         name: release
-  #         path: dist/*
-
+          gh release create -d 1.0.7 --notes-from-tag ../archives/*
+          # gh release create "$GITHUB_REF_NAME" --notes-from-tag ../archives/*
