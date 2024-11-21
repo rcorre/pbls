@@ -1,0 +1,90 @@
+name: Release
+on:
+  push:
+    branches: [ "release-test" ]
+    tags: [ '[0-9]+.[0-9]+*' ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: target/release/pbls
+
+  # publish:
+  #   name: Publish
+  #   needs: [build]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout sources
+  #       uses: actions/checkout@v4
+
+  #     - uses: actions/download-artifact@v4
+
+  #     - name: Build archive
+  #       shell: bash
+  #       run: |
+  #         set -ex
+
+  #         source="$(pwd)"
+  #         mkdir -p runtime/grammars/sources
+  #         tar xJf grammars/grammars.tar.xz -C runtime/grammars/sources
+  #         rm -rf grammars
+
+  #         cd "$(mktemp -d)"
+  #         mv $source/bins-* .
+  #         mkdir dist
+
+  #         for dir in bins-* ; do
+  #             platform=${dir#"bins-"}
+  #             if [[ $platform =~ "windows" ]]; then
+  #                 exe=".exe"
+  #             fi
+  #             pkgname=helix-$GITHUB_REF_NAME-$platform
+  #             mkdir -p $pkgname
+  #             cp $source/LICENSE $source/README.md $pkgname
+  #             mkdir $pkgname/contrib
+  #             cp -r $source/contrib/completion $pkgname/contrib
+  #             mv bins-$platform/runtime $pkgname/
+  #             mv bins-$platform/hx$exe $pkgname
+  #             chmod +x $pkgname/hx$exe
+
+  #             if [[ "$platform" = "x86_64-linux" ]]; then
+  #                 mv bins-$platform/helix-*.AppImage* dist/
+  #             fi
+
+  #             if [ "$exe" = "" ]; then
+  #                 tar cJf dist/$pkgname.tar.xz $pkgname
+  #             else
+  #                 7z a -r dist/$pkgname.zip $pkgname
+  #             fi
+  #         done
+
+  #         tar cJf dist/helix-$GITHUB_REF_NAME-source.tar.xz -C $source .
+  #         mv dist $source/
+
+  #     - name: Upload binaries to release
+  #       uses: svenstaro/upload-release-action@v2
+  #       if: env.preview == 'false'
+  #       with:
+  #         repo_token: ${{ secrets.GITHUB_TOKEN }}
+  #         file: dist/*
+  #         file_glob: true
+  #         tag: ${{ github.ref_name }}
+  #         overwrite: true
+      
+  #     - name: Upload binaries as artifact
+  #       uses: actions/upload-artifact@v4
+  #       if: env.preview == 'true'
+  #       with:
+  #         name: release
+  #         path: dist/*
+
