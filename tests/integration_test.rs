@@ -1,3 +1,4 @@
+use anyhow::{anyhow, bail, Context, Result};
 use core::panic;
 use lsp_server::{Connection, Message};
 use lsp_types::notification::{
@@ -16,9 +17,7 @@ use lsp_types::{
     TextDocumentItem, TextDocumentPositionParams, Url, WorkDoneProgressParams,
     WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
-use pbls::Result;
 use pretty_assertions::assert_eq;
-use std::error::Error;
 
 fn base_uri() -> Url {
     Url::from_file_path(std::fs::canonicalize("./testdata/simple.proto").unwrap()).unwrap()
@@ -242,7 +241,7 @@ impl TestClient {
         Ok(client)
     }
 
-    fn recv<T>(&self) -> std::result::Result<T::Params, Box<dyn Error>>
+    fn recv<T>(&self) -> Result<T::Params>
     where
         T: lsp_types::notification::Notification,
     {
@@ -251,8 +250,8 @@ impl TestClient {
             .receiver
             .recv_timeout(std::time::Duration::from_secs(5))?
         {
-            Message::Request(r) => Err(format!("Expected notification, got: {r:?}"))?,
-            Message::Response(r) => Err(format!("Expected notification, got: {r:?}"))?,
+            Message::Request(r) => bail!("Expected notification, got: {r:?}"),
+            Message::Response(r) => bail!("Expected notification, got: {r:?}"),
             Message::Notification(resp) => {
                 assert_eq!(resp.method, T::METHOD, "Unexpected response {resp:?}");
                 Ok(serde_json::from_value(resp.params)?)
@@ -260,7 +259,7 @@ impl TestClient {
         }
     }
 
-    fn request<T>(&mut self, params: T::Params) -> pbls::Result<T::Result>
+    fn request<T>(&mut self, params: T::Params) -> anyhow::Result<T::Result>
     where
         T: lsp_types::request::Request,
         T::Params: serde::de::DeserializeOwned,
@@ -279,18 +278,18 @@ impl TestClient {
             .receiver
             .recv_timeout(std::time::Duration::from_secs(5))?
         {
-            Message::Request(r) => Err(format!("Expected response, got: {r:?}"))?,
-            Message::Notification(r) => Err(format!("Expected response, got: {r:?}"))?,
+            Message::Request(r) => Err(anyhow!("Expected response, got: {r:?}"))?,
+            Message::Notification(r) => Err(anyhow!("Expected response, got: {r:?}"))?,
             Message::Response(resp) if resp.error.is_some() => {
-                Err(format!("Got error response {:?}", resp))?
+                Err(anyhow!("Got error response {:?}", resp))?
             }
             Message::Response(resp) => Ok(serde_json::from_value(
-                resp.result.ok_or("Missing result from response")?,
+                resp.result.context("Missing result from response")?,
             )?),
         }
     }
 
-    fn notify<T>(&self, params: T::Params) -> pbls::Result<()>
+    fn notify<T>(&self, params: T::Params) -> Result<()>
     where
         T: lsp_types::notification::Notification,
         T::Params: serde::de::DeserializeOwned,
@@ -304,7 +303,7 @@ impl TestClient {
         Ok(())
     }
 
-    fn open(&self, uri: Url) -> pbls::Result<PublishDiagnosticsParams> {
+    fn open(&self, uri: Url) -> Result<PublishDiagnosticsParams> {
         let text = std::fs::read_to_string(uri.path())?;
         self.notify::<DidOpenTextDocument>(DidOpenTextDocumentParams {
             text_document: TextDocumentItem {

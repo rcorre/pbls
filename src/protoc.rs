@@ -1,6 +1,5 @@
+use anyhow::{bail, Context, Result};
 use lsp_types::{Diagnostic, DiagnosticSeverity, Range, Url};
-
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub fn diags(
     uri: &Url,
@@ -8,12 +7,12 @@ pub fn diags(
     proto_paths: &Vec<std::path::PathBuf>,
 ) -> Result<Vec<Diagnostic>> {
     if uri.scheme() != "file" {
-        Err(format!("Unsupported URI scheme {uri}"))?;
+        bail!("Unsupported URI scheme {uri}");
     }
 
-    let path = uri
-        .to_file_path()
-        .or(Err(format!("Failed to normalize URI path: {uri}")))?;
+    let Ok(path) = uri.to_file_path() else {
+        bail!("Failed to normalize URI path: {uri}");
+    };
 
     let mut cmd = std::process::Command::new("protoc");
     cmd
@@ -33,7 +32,10 @@ pub fn diags(
                 .map(|p| "-I".to_string() + p),
         )
         // Add the file we're compiling
-        .arg(path.to_str().ok_or(format!("Non-unicode path: {path:?}"))?);
+        .arg(
+            path.to_str()
+                .with_context(|| format!("Non-unicode path: {path:?}"))?,
+        );
 
     log::debug!("Running protoc: {cmd:?}");
     let output = cmd.output()?;

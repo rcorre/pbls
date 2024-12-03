@@ -24,10 +24,9 @@ use lsp_types::{
     DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, OneOf,
     WorkspaceSymbolParams,
 };
-use std::error::Error;
 use std::fs;
 
-pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
+pub use anyhow::Result;
 
 #[derive(Debug, serde::Deserialize)]
 struct Config {

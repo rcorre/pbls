@@ -3,11 +3,10 @@ use std::collections::hash_map;
 use crate::file::{self};
 
 use super::protoc;
+use anyhow::{anyhow, Context, Result};
 use lsp_types::{SymbolInformation, Url};
 use regex::RegexBuilder;
 use tree_sitter::QueryCursor;
-
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const OPTIONS: &[&str] = &[
     "cc_enable_arenas",
@@ -97,7 +96,7 @@ impl Workspace {
         Ok(self
             .files
             .get(uri)
-            .ok_or(format!("File not loaded: {uri}"))?)
+            .with_context(|| format!("File not loaded: {uri}"))?)
     }
 
     fn find_import(&self, name: &str) -> Option<std::path::PathBuf> {
@@ -114,7 +113,7 @@ impl Workspace {
             return Ok(());
         };
 
-        let uri = Url::from_file_path(path.clone()).or(Err(format!("Invalid path {path:?}")))?;
+        let uri = Url::from_file_path(path.clone()).or(Err(anyhow!("Invalid path {path:?}")))?;
         if self.files.contains_key(&uri) {
             return Ok(()); // already parsed
         };
@@ -160,7 +159,7 @@ impl Workspace {
         let file = self
             .files
             .get_mut(uri)
-            .ok_or(format!("File not loaded: {uri}"))?;
+            .with_context(|| format!("File not loaded: {uri}"))?;
         file.edit(changes)?;
 
         let mut qc = tree_sitter::QueryCursor::new();
@@ -203,7 +202,7 @@ impl Workspace {
 
         for path in paths {
             log::debug!("Loading {path:?}");
-            let uri = Url::from_file_path(&path).or(Err(format!("Invalid path: {path:?}")))?;
+            let uri = Url::from_file_path(&path).or(Err(anyhow!("Invalid path: {path:?}")))?;
             if let Some(file) = self.files.get(&uri) {
                 file
             } else {
@@ -257,7 +256,7 @@ impl Workspace {
         let file = self
             .files
             .get(uri)
-            .ok_or("Completion requested on file with no tree for {uri}")?;
+            .with_context(|| format!("Completion requested on file with no tree for {uri}"))?;
         match file.completion_context(line, character)? {
             Some(file::CompletionContext::Message(msg)) => self.complete_types(&msg, file),
             Some(file::CompletionContext::Enum(_)) => Ok(None), // TODO
@@ -331,7 +330,7 @@ impl Workspace {
             file::GotoContext::Type(t) => {
                 let src = self
                     .find_symbol(uri.clone(), file, &t)?
-                    .ok_or("Symbol not found: {t:?}")?;
+                    .with_context(|| format!("Symbol not found: {t:?}"))?;
                 let src = self.get(&src.uri)?;
                 let pkg = src.package();
                 for (uri, file) in self.files.iter() {
@@ -512,11 +511,14 @@ impl Workspace {
 
         let current = std::path::Path::new(url.path())
             .file_name()
-            .ok_or("Invalid path: {uri}")?
+            .with_context(|| format!("Invalid path: {url}"))?
             .to_str()
-            .ok_or("Invalid path: {uri}")?;
+            .with_context(|| format!("Invalid path: {url}"))?;
 
-        let file = self.files.get(url).ok_or("File not loaded: {uri}")?;
+        let file = self
+            .files
+            .get(url)
+            .with_context(|| format!("File not loaded: {url}"))?;
         let mut qc = tree_sitter::QueryCursor::new();
         let existing = file
             .imports(&mut qc)

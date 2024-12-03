@@ -1,6 +1,5 @@
+use anyhow::{Context, Result};
 use std::sync::OnceLock;
-
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn language() -> tree_sitter::Language {
     static LANGUAGE: OnceLock<tree_sitter::Language> = OnceLock::new();
@@ -54,7 +53,7 @@ impl File {
             .set_language(language())
             .expect("Error loading proto language");
 
-        let tree = parser.parse(&text, None).ok_or("Parse failed")?;
+        let tree = parser.parse(&text, None).context("Parse failed")?;
         log::trace!("Parsed: {}", tree.root_node().to_sexp());
         Ok(File { tree, text })
     }
@@ -63,7 +62,7 @@ impl File {
         for change in changes {
             let range = change
                 .range
-                .ok_or("No range in change notification {change:?}")?;
+                .with_context(|| format!("No range in change notification {change:?}"))?;
             let mut lines = self.text.split_inclusive("\n").peekable();
             // First count bytes in all lines preceding the edit.
             let start_byte = lines
@@ -104,7 +103,7 @@ impl File {
         parser
             .set_language(language())
             .expect("Error loading proto language");
-        self.tree = parser.parse(&self.text, None).ok_or("Parse failed")?;
+        self.tree = parser.parse(&self.text, None).context("Parse failed")?;
         log::trace!("Edited tree to: {}", self.tree.root_node().to_sexp());
 
         Ok(())
@@ -251,7 +250,7 @@ impl File {
             .tree
             .root_node()
             .named_descendant_for_point_range(pos, pos)
-            .ok_or(format!("No descendant for range {pos:?}"))?;
+            .with_context(|| format!("No descendant for range {pos:?}"))?;
 
         log::debug!(
             "Getting completion context for node={node:?} parent={:?}",
@@ -301,7 +300,7 @@ impl File {
                 .lines()
                 .skip(row)
                 .next()
-                .ok_or(format!("Line {row} out of range"))?
+                .with_context(|| format!("Line {row} out of range"))?
                 .chars()
                 .take(col)
                 .collect();
