@@ -2,7 +2,6 @@ use std::collections::hash_map;
 
 use crate::file::{self};
 
-use super::protoc;
 use anyhow::{anyhow, Context, Result};
 use lsp_types::{SymbolInformation, Url};
 use regex::RegexBuilder;
@@ -130,8 +129,8 @@ impl Workspace {
     }
 
     pub fn open(&mut self, uri: Url, text: String) -> Result<Vec<lsp_types::Diagnostic>> {
-        let diags = protoc::diags(&uri, &text, &self.proto_paths);
         let file = file::File::new(text)?;
+        let diags = file.diags(&uri, &self.proto_paths);
 
         let mut qc = tree_sitter::QueryCursor::new();
         let imports = Vec::from_iter(file.imports(&mut qc).map(str::to_string));
@@ -147,7 +146,7 @@ impl Workspace {
 
     pub fn save(&mut self, uri: Url) -> Result<Vec<lsp_types::Diagnostic>> {
         let file = self.get(&uri)?;
-        protoc::diags(&uri, &file.text(), &self.proto_paths)
+        file.diags(&uri, &self.proto_paths)
     }
 
     pub fn edit(

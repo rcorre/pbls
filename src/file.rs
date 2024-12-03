@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
+use lsp_types::{Diagnostic, Url};
 use std::sync::OnceLock;
+
+use crate::protoc;
 
 fn language() -> tree_sitter::Language {
     static LANGUAGE: OnceLock<tree_sitter::Language> = OnceLock::new();
@@ -113,8 +116,12 @@ impl File {
         node.utf8_text(self.text.as_bytes()).unwrap()
     }
 
-    pub fn text(&self) -> &str {
-        self.text.as_str()
+    pub fn diags(
+        &self,
+        uri: &Url,
+        import_paths: &Vec<std::path::PathBuf>,
+    ) -> Result<Vec<Diagnostic>> {
+        protoc::diags(uri, self.text.as_str(), import_paths)
     }
 
     pub fn package(&self) -> Option<&str> {
