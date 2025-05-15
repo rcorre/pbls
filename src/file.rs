@@ -23,6 +23,7 @@ pub struct Symbol {
 pub enum CompletionContext<'a> {
     Message(&'a str),
     Enum(&'a str),
+    RPC,
     Import,
     Keyword,
     Syntax,
@@ -204,7 +205,9 @@ impl File {
         log::trace!("Finding type of {node:?}");
         match node {
             None => None,
-            Some(n) if n.kind() == "type" => Some(self.get_text(n)),
+            Some(n) if n.kind() == "type" || n.kind() == "enumMessageType" => {
+                Some(self.get_text(n))
+            }
             Some(n) => self.field_type(n.parent()),
         }
     }
@@ -227,6 +230,7 @@ impl File {
                 .parent() // message
                 .and_then(|p| self.type_name(p))
                 .and_then(|n| Some(CompletionContext::Message(n))),
+            Some(n) if n.kind() == "serviceBody" => Some(CompletionContext::RPC),
             Some(n) => self.parent_context(n.parent()),
         }
     }
@@ -440,13 +444,13 @@ impl File {
     // Get the name of a Enum or Message node.
     fn type_name(&self, node: tree_sitter::Node) -> Option<&str> {
         debug_assert!(
-            node.kind() == "enum" || node.kind() == "message",
+            node.kind() == "enum" || node.kind() == "message" || node.kind() == "service",
             "{node:?}"
         );
         let mut cursor = node.walk();
-        let child = node
-            .named_children(&mut cursor)
-            .find(|c| c.kind() == "messageName" || c.kind() == "enumName");
+        let child = node.named_children(&mut cursor).find(|c| {
+            c.kind() == "messageName" || c.kind() == "enumName" || c.kind() == "serviceName"
+        });
         child.and_then(|c| c.utf8_text(self.text.as_bytes()).ok())
     }
 }
@@ -764,6 +768,10 @@ mod tests {
                 ENUM_TWO_|
                 |
             }
+
+            service Greeter {
+              rpc| SayHello (Hello|Request) returns (Hello|Reply) {}
+            }
             "#,
         );
 
@@ -783,6 +791,9 @@ mod tests {
                 None,
                 Some(CompletionContext::Enum("Enum")),
                 None,
+                None,
+                Some(CompletionContext::RPC),
+                Some(CompletionContext::RPC),
             ]
         );
     }
@@ -957,6 +968,10 @@ mod tests {
                 Baz.|Buz b = |4;
                 foo.bar|.|Buz.Boz g = 5|;
             }
+
+            service G|reeter {
+              rpc SayH|ello (Hel|loRequest) retu|rns (Hell|oReply) {}
+            }
             "#,
         );
 
@@ -993,6 +1008,17 @@ mod tests {
                     parent: Some("Foo".into()),
                 })),
                 None,
+                None,
+                None,
+                Some(GotoContext::Type(GotoTypeContext {
+                    name: "HelloRequest",
+                    parent: None,
+                })),
+                None,
+                Some(GotoContext::Type(GotoTypeContext {
+                    name: "HelloReply",
+                    parent: None,
+                })),
             ]
         );
     }

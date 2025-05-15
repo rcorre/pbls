@@ -258,7 +258,7 @@ impl Workspace {
             .get(uri)
             .with_context(|| format!("Completion requested on file with no tree for {uri}"))?;
         match file.completion_context(line, character)? {
-            Some(file::CompletionContext::Message(msg)) => self.complete_types(&msg, file),
+            Some(file::CompletionContext::Message(msg)) => self.complete_types(msg, file),
             Some(file::CompletionContext::Enum(_)) => Ok(None), // TODO
             Some(file::CompletionContext::Keyword) => Ok(complete_keywords()),
             Some(file::CompletionContext::Import) => self.complete_imports(uri),
@@ -286,6 +286,13 @@ impl Workspace {
                         .collect(),
                 )))
             }
+            Some(file::CompletionContext::RPC) => Ok(Some(lsp_types::CompletionResponse::Array(
+                // Only messages can be used as types in RPC
+                self.complete_messages("", file)?
+                    .into_iter()
+                    .filter(|x| x.kind == Some(lsp_types::CompletionItemKind::STRUCT))
+                    .collect(),
+            ))),
             None => Ok(None),
         }
     }
@@ -442,11 +449,11 @@ impl Workspace {
         Ok(None)
     }
 
-    fn complete_types(
+    fn complete_messages(
         &self,
         base_name: &str,
         file: &file::File,
-    ) -> Result<Option<lsp_types::CompletionResponse>> {
+    ) -> Result<Vec<lsp_types::CompletionItem>> {
         let current_package = file.package();
         let mut qc = QueryCursor::new();
         let mut items: Vec<_> = file
@@ -477,6 +484,16 @@ impl Workspace {
                 );
             }
         }
+
+        Ok(items)
+    }
+
+    fn complete_types(
+        &self,
+        base_name: &str,
+        file: &file::File,
+    ) -> Result<Option<lsp_types::CompletionResponse>> {
+        let mut items = self.complete_messages(base_name, file)?;
 
         let builtins = [
             "bool", "bytes", "double", "fixed32", "fixed64", "float", "int32", "int64", "sfixed32",
@@ -758,9 +775,15 @@ mod tests {
         proto(subdir, "baz.proto", &["syntax = \"proto3\";"]);
 
         ws.open(uri.clone(), text).unwrap();
+
+        let mut actual = match ws.complete(&uri, 1, "import \"".len()).unwrap().unwrap() {
+            lsp_types::CompletionResponse::Array(vec) => vec,
+            lsp_types::CompletionResponse::List(_) => panic!("Expected array"),
+        };
+        actual.sort_by(|a, b| a.label.cmp(&b.label));
         assert_eq!(
-            ws.complete(&uri, 1, "import \"".len()).unwrap().unwrap(),
-            lsp_types::CompletionResponse::Array(vec![
+            actual,
+            vec![
                 lsp_types::CompletionItem {
                     label: "bar.proto".into(),
                     kind: Some(lsp_types::CompletionItemKind::FILE),
@@ -773,7 +796,7 @@ mod tests {
                     insert_text: Some("subdir/baz.proto\";".into()),
                     ..Default::default()
                 },
-            ])
+            ]
         );
     }
 
@@ -874,26 +897,29 @@ mod tests {
             &tmp,
             "foo.proto",
             &[
-                "syntax = \"proto3\";",        // 0
-                "package main;",               // 1
-                "import \"bar.proto\";",       // 2
-                "import \"baz.proto\";",       // 3
-                "message One {",               // 4
-                "message Two {",               // 5
-                "enum Three {}",               // 6
-                "}",                           // 7
-                "Two.Three tt = 1;",           // 8
-                "}",                           // 9
-                "message Stuff {",             // 10
-                "One one = 1;",                // 11
-                "One.Two two = 2;",            // 12
-                "One.Two.Three three = 3;",    // 13
-                "Two nope = 4;",               // 14
-                "bar.One bar_one = 5;",        // 15
-                "bar.One.Two b1 = 6;",         // 16
-                "bar.One.Two.Three b123 = 7;", // 17
-                "baz.buz.Baz bazbuz = 8;",     // 18
-                "}",                           // 19
+                "syntax = \"proto3\";",                    // 0
+                "package main;",                           // 1
+                "import \"bar.proto\";",                   // 2
+                "import \"baz.proto\";",                   // 3
+                "message One {",                           // 4
+                "message Two {",                           // 5
+                "enum Three {}",                           // 6
+                "}",                                       // 7
+                "Two.Three tt = 1;",                       // 8
+                "}",                                       // 9
+                "message Stuff {",                         // 10
+                "One one = 1;",                            // 11
+                "One.Two two = 2;",                        // 12
+                "One.Two.Three three = 3;",                // 13
+                "Two nope = 4;",                           // 14
+                "bar.One bar_one = 5;",                    // 15
+                "bar.One.Two b1 = 6;",                     // 16
+                "bar.One.Two.Three b123 = 7;",             // 17
+                "baz.buz.Baz bazbuz = 8;",                 // 18
+                "}",                                       // 19
+                "service Greeter {",                       // 20
+                "rpc SayHello (One) returns (One.Two) {}", // 21
+                "}",                                       // 22
             ],
         );
         let (bar_uri, _) = proto(
@@ -1125,6 +1151,54 @@ mod tests {
             )
             .unwrap(),
             None,
+        );
+
+        assert_eq!(
+            ws.goto(
+                foo_uri.clone(),
+                lsp_types::Position {
+                    line: 21,
+                    character: 16,
+                }
+            )
+            .unwrap(),
+            Some(lsp_types::Location {
+                uri: foo_uri.clone(),
+                range: lsp_types::Range {
+                    start: lsp_types::Position {
+                        line: 4,
+                        character: 0,
+                    },
+                    end: lsp_types::Position {
+                        line: 9,
+                        character: 1,
+                    },
+                },
+            })
+        );
+
+        assert_eq!(
+            ws.goto(
+                foo_uri.clone(),
+                lsp_types::Position {
+                    line: 21,
+                    character: 30,
+                }
+            )
+            .unwrap(),
+            Some(lsp_types::Location {
+                uri: foo_uri.clone(),
+                range: lsp_types::Range {
+                    start: lsp_types::Position {
+                        line: 5,
+                        character: 0,
+                    },
+                    end: lsp_types::Position {
+                        line: 7,
+                        character: 1,
+                    },
+                },
+            })
         );
     }
 }

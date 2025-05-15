@@ -43,6 +43,9 @@ fn what_uri() -> Url {
     Url::from_file_path(std::fs::canonicalize("./testdata/folder/what.proto").unwrap()).unwrap()
 }
 
+fn grpc_uri() -> Url {
+    Url::from_file_path(std::fs::canonicalize("./testdata/grpc.proto").unwrap()).unwrap()
+}
 fn diag(uri: Url, target: &str, message: &str) -> Diagnostic {
     Diagnostic {
         range: locate_sym(uri, target).range,
@@ -524,6 +527,8 @@ fn test_workspace_symbols() -> pbls::Result<()> {
             sym(error_uri(), "Nah", "message Nah"),
             sym(error_uri(), "Noo", "message Noo"),
             sym(stuff_uri(), "Stuff", "message Stuff"),
+            sym(grpc_uri(), "HelloRequest", "message HelloRequest"),
+            sym(grpc_uri(), "HelloReply", "message HelloReply"),
         ],
     );
 
@@ -596,6 +601,30 @@ fn test_goto_definition_same_file() -> pbls::Result<()> {
         Some(GotoDefinitionResponse::Scalar(locate_sym(
             base_uri(),
             "message Foo",
+        )))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_goto_definition_grpc() -> pbls::Result<()> {
+    let mut client = TestClient::new()?;
+    client.open(grpc_uri())?;
+
+    assert_eq!(
+        client.request::<GotoDefinition>(goto(grpc_uri(), "SayHello (Hello", 11))?,
+        Some(GotoDefinitionResponse::Scalar(locate_sym(
+            grpc_uri(),
+            "message HelloRequest"
+        )))
+    );
+
+    assert_eq!(
+        client.request::<GotoDefinition>(goto(grpc_uri(), "returns (HelloReply)", 12))?,
+        Some(GotoDefinitionResponse::Scalar(locate_sym(
+            grpc_uri(),
+            "message HelloReply",
         )))
     );
 
@@ -772,6 +801,12 @@ fn test_complete_import() -> pbls::Result<()> {
     assert_elements_equal(
         actual,
         vec![
+            CompletionItem {
+                label: "grpc.proto".into(),
+                kind: Some(CompletionItemKind::FILE),
+                insert_text: Some("grpc.proto\";".into()),
+                ..Default::default()
+            },
             CompletionItem {
                 label: "error.proto".into(),
                 kind: Some(CompletionItemKind::FILE),
@@ -1026,6 +1061,41 @@ fn test_complete_type() -> pbls::Result<()> {
         ],
         |s| s.label.clone(),
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_complete_type_grpc() -> pbls::Result<()> {
+    let mut client = TestClient::new()?;
+    client.open(grpc_uri())?;
+
+    for text in &["lloRequest) returns", "lloReply) {}"] {
+        // get completion in the body of message Foo.
+        let pos = locate_sym(grpc_uri(), text).range.start;
+
+        let resp = client.request::<Completion>(completion_params(grpc_uri(), pos))?;
+
+        let Some(lsp_types::CompletionResponse::Array(actual)) = resp else {
+            panic!("Unexpected completion response {resp:?}");
+        };
+
+        let expected = [
+            "HelloRequest",
+            "HelloReply",
+            "Dep",
+            "other.Other",
+            "other.Other.Nested",
+        ]
+        .map(|name| CompletionItem {
+            label: name.into(),
+            kind: Some(CompletionItemKind::STRUCT),
+            ..Default::default()
+        })
+        .to_vec();
+
+        assert_elements_equal(actual, expected, |s| s.label.clone());
+    }
 
     Ok(())
 }
