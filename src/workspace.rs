@@ -39,7 +39,7 @@ pub struct Workspace {
 // Return the possible package qualifiers to_pkg could use for a type imported from from_pkg
 fn possible_qualifiers<'a>(from_pkg: &'a str, to_pkg: &'a str) -> Vec<&'a str> {
     log::trace!("possible_qualifiers({from_pkg}, {to_pkg})");
-    if to_pkg == "" {
+    if to_pkg.is_empty() {
         return vec![from_pkg];
     }
 
@@ -54,7 +54,7 @@ fn possible_qualifiers<'a>(from_pkg: &'a str, to_pkg: &'a str) -> Vec<&'a str> {
     } else {
         res.push(from_pkg);
     }
-    return res;
+    res
 }
 
 #[test]
@@ -92,11 +92,10 @@ impl Workspace {
         }
     }
 
-    fn get(self: &Self, uri: &Url) -> Result<&file::File> {
-        Ok(self
-            .files
+    fn get(&self, uri: &Url) -> Result<&file::File> {
+        self.files
             .get(uri)
-            .with_context(|| format!("File not loaded: {uri}"))?)
+            .with_context(|| format!("File not loaded: {uri}"))
     }
 
     fn find_import(&self, name: &str) -> Option<std::path::PathBuf> {
@@ -147,7 +146,7 @@ impl Workspace {
 
     pub fn save(&mut self, uri: Url) -> Result<Vec<lsp_types::Diagnostic>> {
         let file = self.get(&uri)?;
-        protoc::diags(&uri, &file.text(), &self.proto_paths)
+        protoc::diags(&uri, file.text(), &self.proto_paths)
     }
 
     pub fn edit(
@@ -191,7 +190,7 @@ impl Workspace {
             .flatten()
             .filter_map(|p| p.ok())
             .map(|f| f.path())
-            .filter(|p| p.is_file() && p.extension().map_or(false, |e| e == "proto"))
+            .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "proto"))
             .filter_map(|p| match std::fs::canonicalize(&p) {
                 Ok(p) => Some(p),
                 Err(err) => {
@@ -286,7 +285,7 @@ impl Workspace {
                         .collect(),
                 )))
             }
-            Some(file::CompletionContext::RPC) => Ok(Some(lsp_types::CompletionResponse::Array(
+            Some(file::CompletionContext::Rpc) => Ok(Some(lsp_types::CompletionResponse::Array(
                 // Only messages can be used as types in RPC
                 self.complete_messages("", file)?
                     .into_iter()
@@ -323,7 +322,7 @@ impl Workspace {
 
         let doc = params.text_document_position;
         let uri = &doc.text_document.uri;
-        let file = self.get(&uri)?;
+        let file = self.get(uri)?;
 
         let Some(item) = file.type_at(
             doc.position.line.try_into()?,
@@ -336,7 +335,7 @@ impl Workspace {
         match &item {
             file::GotoContext::Type(t) => {
                 let src = self
-                    .find_symbol(uri.clone(), file, &t)?
+                    .find_symbol(uri.clone(), file, t)?
                     .with_context(|| format!("Symbol not found: {t:?}"))?;
                 let src = self.get(&src.uri)?;
                 let pkg = src.package();

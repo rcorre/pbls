@@ -1,11 +1,7 @@
 use anyhow::{bail, Context, Result};
 use lsp_types::{Diagnostic, DiagnosticSeverity, Range, Url};
 
-pub fn diags(
-    uri: &Url,
-    text: &str,
-    proto_paths: &Vec<std::path::PathBuf>,
-) -> Result<Vec<Diagnostic>> {
+pub fn diags(uri: &Url, text: &str, proto_paths: &[std::path::PathBuf]) -> Result<Vec<Diagnostic>> {
     if uri.scheme() != "file" {
         bail!("Unsupported URI scheme {uri}");
     }
@@ -43,10 +39,7 @@ pub fn diags(
     log::debug!("Protoc exited: {output:?}");
     let stderr = std::str::from_utf8(output.stderr.as_slice())?;
 
-    Ok(stderr
-        .lines()
-        .filter_map(|l| parse_diag(l, &text))
-        .collect())
+    Ok(stderr.lines().filter_map(|l| parse_diag(l, text)).collect())
 }
 
 // Parse a single error line from the protoc parser into a diagnostic.
@@ -69,7 +62,7 @@ fn parse_diag(diag: &str, file_contents: &str) -> Option<lsp_types::Diagnostic> 
 
     // Lines from protoc stderr are 1-indexed.
     let lineno = linestr.parse::<u32>().unwrap() - 1;
-    let line = file_contents.lines().skip(lineno.try_into().ok()?).next()?;
+    let line = file_contents.lines().nth(lineno.try_into().ok()?)?;
     let start = line.find(|c: char| !c.is_whitespace()).unwrap_or(0);
     let end = line
         .rfind(|c: char| !c.is_whitespace())

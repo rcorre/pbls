@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 fn language() -> tree_sitter::Language {
     static LANGUAGE: OnceLock<tree_sitter::Language> = OnceLock::new();
-    *LANGUAGE.get_or_init(|| tree_sitter_protobuf::language())
+    *LANGUAGE.get_or_init(tree_sitter_protobuf::language)
 }
 
 #[derive(Debug, PartialEq)]
@@ -23,7 +23,7 @@ pub struct Symbol {
 pub enum CompletionContext<'a> {
     Message(&'a str),
     Enum(&'a str),
-    RPC,
+    Rpc,
     Import,
     Keyword,
     Syntax,
@@ -74,7 +74,7 @@ impl File {
             // Now add bytes up to the character within the start line.
             let start_offset = lines
                 .peek()
-                .map(|line| char_to_byte(&line, range.start.character))
+                .map(|line| char_to_byte(line, range.start.character))
                 .unwrap_or(0);
             let start_byte = start_byte + start_offset;
             // Now count bytes in all lines following the edit.
@@ -87,7 +87,7 @@ impl File {
             // Now add bytes up to the character within the end line.
             let end_offset = lines
                 .peek()
-                .map(|line| char_to_byte(&line, range.end.character))
+                .map(|line| char_to_byte(line, range.end.character))
                 .unwrap_or(0);
             let end_byte = end_byte + end_offset - start_offset;
 
@@ -126,7 +126,7 @@ impl File {
 
         let mut qc = tree_sitter::QueryCursor::new();
         let res = qc
-            .matches(&query, self.tree.root_node(), self.text.as_bytes())
+            .matches(query, self.tree.root_node(), self.text.as_bytes())
             .next()
             .map(|m| m.captures[0].node)
             .map(|n| self.get_text(n))
@@ -143,7 +143,7 @@ impl File {
             tree_sitter::Query::new(language(), "(import (strLit) @path)").unwrap()
         });
 
-        qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
+        qc.matches(query, self.tree.root_node(), self.text.as_bytes())
             .map(|m| m.captures[0].node)
             .map(|n| self.get_text(n))
             .map(|s| s.trim_matches('"'))
@@ -165,7 +165,7 @@ impl File {
             .unwrap()
         });
 
-        qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
+        qc.matches(query, self.tree.root_node(), self.text.as_bytes())
             .map(|m| (m.captures[0].node, m.captures[1].node))
             .map(|(def, id)| {
                 let name = self.get_text(id);
@@ -225,30 +225,26 @@ impl File {
             Some(n) if n.kind() == "enumBody" => n
                 .parent() // enum
                 .and_then(|p| self.type_name(p))
-                .and_then(|n| Some(CompletionContext::Enum(n))),
+                .map(CompletionContext::Enum),
             Some(n) if n.kind() == "messageBody" => n
                 .parent() // message
                 .and_then(|p| self.type_name(p))
-                .and_then(|n| Some(CompletionContext::Message(n))),
-            Some(n) if n.kind() == "serviceBody" => Some(CompletionContext::RPC),
+                .map(CompletionContext::Message),
+            Some(n) if n.kind() == "serviceBody" => Some(CompletionContext::Rpc),
             Some(n) => self.parent_context(n.parent()),
         }
     }
 
-    pub fn completion_context(
-        self: &Self,
-        row: usize,
-        col: usize,
-    ) -> Result<Option<CompletionContext>> {
+    pub fn completion_context(&self, row: usize, col: usize) -> Result<Option<CompletionContext>> {
         if self.tree.root_node().kind() != "source_file" {
             // If the whole document is invalid, we need to define a syntax.
             return Ok(Some(CompletionContext::Syntax));
         }
 
         let pos = tree_sitter::Point {
-            row: row.try_into().unwrap(),
+            row,
             // Generally, the node before the cursor is more interesting for context.
-            column: (col.checked_sub(1).unwrap_or(0)).try_into()?,
+            column: col.saturating_sub(1),
         };
         let node = self
             .tree
@@ -272,12 +268,10 @@ impl File {
         } else if is_sexp(node, &["optionName", "fullIdent", "ident"]) {
             // option c| -> (option (optionName (fullIdent (ident))))
             Some(CompletionContext::Option)
-        } else if node.is_error() && self.get_text(node).starts_with("option ") {
-            // option | -> (ERROR)
-            Some(CompletionContext::Option)
-        } else if node
-            .parent()
-            .is_some_and(|p| p.is_error() && self.get_text(p).starts_with("option "))
+        } else if (node.is_error() && self.get_text(node).starts_with("option "))
+            || node
+                .parent()
+                .is_some_and(|p| p.is_error() && self.get_text(p).starts_with("option "))
         {
             // option | -> (ERROR)
             Some(CompletionContext::Option)
@@ -288,7 +282,7 @@ impl File {
             // import "foo|.proto" -> (import (strLit))
             Some(CompletionContext::Import)
         } else if (node.kind() == "ident" || node.kind() == "type")
-            && !node.parent().is_some_and(|p| p.kind() == "oneofName")
+            && node.parent().is_none_or(|p| p.kind() != "oneofName")
         {
             // message Foo { Bar| -> (ident)
             // message Foo { string| -> (type (string))
@@ -302,8 +296,7 @@ impl File {
             let line: String = self
                 .text
                 .lines()
-                .skip(row)
-                .next()
+                .nth(row)
                 .with_context(|| format!("Line {row} out of range"))?
                 .chars()
                 .take(col)
@@ -326,7 +319,7 @@ impl File {
     }
 
     pub fn type_references(
-        self: &Self,
+        &self,
         pkg: Option<&str>,
         typ: &GotoTypeContext,
     ) -> Vec<tree_sitter::Range> {
@@ -337,7 +330,7 @@ impl File {
         log::trace!("Searching for references to {typ} in package {pkg:?}");
 
         let mut qc = tree_sitter::QueryCursor::new();
-        qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
+        qc.matches(query, self.tree.root_node(), self.text.as_bytes())
             .map(|m| m.captures[0].node)
             .inspect(|x| log::trace!("Check {x:?}: {} == {typ}", self.get_text(*x)))
             .filter(|node| {
@@ -362,27 +355,24 @@ impl File {
             .collect()
     }
 
-    pub fn import_references(self: &Self, file: &str) -> Vec<tree_sitter::Range> {
+    pub fn import_references(&self, file: &str) -> Vec<tree_sitter::Range> {
         static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
         let query = QUERY.get_or_init(|| {
             tree_sitter::Query::new(language(), "(import (strLit) @name)").unwrap()
         });
 
         let mut qc = tree_sitter::QueryCursor::new();
-        qc.matches(&query, self.tree.root_node(), self.text.as_bytes())
+        qc.matches(query, self.tree.root_node(), self.text.as_bytes())
             .map(|m| m.captures[0].node)
             .filter(|n| self.get_text(*n).trim_matches('"') == file)
             .map(|n| n.range())
             .collect()
     }
 
-    pub fn type_at(self: &Self, row: usize, col: usize) -> Option<GotoContext> {
-        log::trace!("Getting type at row: {row} col: {col}");
+    pub fn type_at(&self, row: usize, column: usize) -> Option<GotoContext> {
+        log::trace!("Getting type at row: {row} col: {column}");
 
-        let pos = tree_sitter::Point {
-            row: row.try_into().unwrap(),
-            column: col.try_into().unwrap(),
-        };
+        let pos = tree_sitter::Point { row, column };
         let node = self
             .tree
             .root_node()
@@ -421,18 +411,17 @@ impl File {
         log::trace!("Finding parent name for {node:?}");
         let mut node = node;
         let mut res = Vec::<&str>::new();
-        loop {
-            if let Some(parent) = node.parent() {
-                if parent.kind() == "message" {
-                    let name = self.type_name(parent);
-                    log::trace!("Appending parent name {name:?}");
-                    name.map(|n| res.push(n));
+        while let Some(parent) = node.parent() {
+            if parent.kind() == "message" {
+                let name = self.type_name(parent);
+                log::trace!("Appending parent name {name:?}");
+                if let Some(n) = name {
+                    res.push(n)
                 }
-                node = parent;
-            } else {
-                break;
             }
+            node = parent;
         }
+
         if res.is_empty() {
             None
         } else {
@@ -473,7 +462,7 @@ fn is_top_level_error(node: tree_sitter::Node) -> bool {
 // relative_name("Foo.Bar", "Foo.Bar.Baz") -> "Baz"
 // relative_name("Foo.Bar", "Foo.Bar") -> "Bar"
 // relative_name("Foo.Bar", "Foo") -> "Foo"
-fn relative_name<'a>(message: &str, name: &'a str) -> String {
+fn relative_name(message: &str, name: &str) -> String {
     let prefix = name
         .split(".")
         .zip(message.split("."))
@@ -571,15 +560,15 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
         let text = r#"syntax="proto3"; package main;"#;
         let file = File::new(text.to_string()).unwrap();
-        assert_eq!(file.package(), Some("main".into()));
+        assert_eq!(file.package(), Some("main"));
 
         let text = r#"syntax="proto3"; package main; package other"#;
         let file = File::new(text.to_string()).unwrap();
-        assert_eq!(file.package(), Some("main".into()));
+        assert_eq!(file.package(), Some("main"));
 
         let text = r#"syntax="proto3"; package foo.bar.baz;"#;
         let file = File::new(text.to_string()).unwrap();
-        assert_eq!(file.package(), Some("foo.bar.baz".into()));
+        assert_eq!(file.package(), Some("foo.bar.baz"));
 
         let text = r#"syntax="proto3";"#;
         let file = File::new(text.to_string()).unwrap();
@@ -792,8 +781,8 @@ mod tests {
                 Some(CompletionContext::Enum("Enum")),
                 None,
                 None,
-                Some(CompletionContext::RPC),
-                Some(CompletionContext::RPC),
+                Some(CompletionContext::Rpc),
+                Some(CompletionContext::Rpc),
             ]
         );
     }

@@ -178,25 +178,21 @@ fn notify_did_change(
 }
 
 fn has_proto_files(path: impl AsRef<std::path::Path>) -> Result<bool> {
-    Ok(std::fs::read_dir(path)?
-        .find(|x| match x {
-            Ok(entry) => entry
-                .path()
-                .extension()
-                .map_or(false, |e| e.to_str() == Some("proto")),
-            Err(_) => false,
-        })
-        .is_some())
+    Ok(std::fs::read_dir(path)?.any(|x| match x {
+        Ok(entry) => entry
+            .path()
+            .extension()
+            .is_some_and(|e| e.to_str() == Some("proto")),
+        Err(_) => false,
+    }))
 }
 
 fn find_dirs(root: std::path::PathBuf) -> Result<Vec<std::path::PathBuf>> {
     let mut res = vec![];
-    for entry in std::fs::read_dir(&root)? {
-        if let Ok(entry) = entry {
-            if entry.metadata().is_ok_and(|m| m.is_dir()) {
-                let mut dirs = find_dirs(entry.path())?;
-                res.append(&mut dirs);
-            }
+    for entry in std::fs::read_dir(&root)?.flatten() {
+        if entry.metadata().is_ok_and(|m| m.is_dir()) {
+            let mut dirs = find_dirs(entry.path())?;
+            res.append(&mut dirs);
         }
     }
     res.push(root);

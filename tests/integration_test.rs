@@ -83,8 +83,7 @@ fn position(uri: Url, text: &str, column: u32) -> TextDocumentPositionParams {
     let (lineno, line) = filetext
         .lines()
         .enumerate()
-        .skip_while(|(_, l)| !l.contains(text))
-        .next()
+        .find(|(_, l)| l.contains(text))
         .unwrap_or_else(|| panic!("{text} not found in {uri}"));
 
     let character = line.find(text).unwrap_or(0);
@@ -121,10 +120,7 @@ fn locate(uri: Url, text: &str) -> Location {
     let (start_line, start_col) = filetext
         .lines()
         .enumerate()
-        .find_map(|(i, l)| match l.find(text.as_str()) {
-            Some(col) => Some((i, col)),
-            None => None,
-        })
+        .find_map(|(i, l)| l.find(text.as_str()).map(|col| (i, col)))
         .unwrap_or_else(|| panic!("{text} not found in {uri}"));
 
     Location {
@@ -150,10 +146,7 @@ fn locate_sym(uri: Url, name: &str) -> Location {
     let (start_line, start_col) = filetext
         .lines()
         .enumerate()
-        .find_map(|(i, l)| match l.find(name) {
-            Some(col) => Some((i, col)),
-            None => None,
-        })
+        .find_map(|(i, l)| l.find(name).map(|col| (i, col)))
         .unwrap_or_else(|| panic!("{name} not found in {uri}"));
 
     let mut nesting = 0;
@@ -1137,7 +1130,7 @@ fn test_import_discovery() -> pbls::Result<()> {
     std::os::windows::fs::symlink_dir(tmp.path().join("loop"), tmp.path().join("loop/loop"))?;
 
     std::fs::write(
-        &tmp.path().join("root.proto"),
+        tmp.path().join("root.proto"),
         r#"
         syntax = "proto3"; 
 
@@ -1155,29 +1148,29 @@ fn test_import_discovery() -> pbls::Result<()> {
     )?;
 
     std::fs::write(
-        &tmp.path().join("sibling.proto"),
+        tmp.path().join("sibling.proto"),
         "syntax = \"proto3\"; message Sibling{}",
     )?;
 
-    std::fs::write(&tmp.path().join("a/a.txt"), "not a proto")?;
+    std::fs::write(tmp.path().join("a/a.txt"), "not a proto")?;
     std::fs::write(
-        &tmp.path().join("a/a.proto"),
+        tmp.path().join("a/a.proto"),
         "syntax = \"proto3\"; message A{}",
     )?;
     std::fs::write(
-        &tmp.path().join("a/f/af.proto"),
+        tmp.path().join("a/f/af.proto"),
         "syntax = \"proto3\"; message AF{}",
     )?;
 
-    std::fs::write(&tmp.path().join("b/c/bc.txt"), "not a proto")?;
+    std::fs::write(tmp.path().join("b/c/bc.txt"), "not a proto")?;
     std::fs::write(
-        &tmp.path().join("b/c/bc.proto"),
+        tmp.path().join("b/c/bc.proto"),
         "syntax = \"proto3\"; message BC{}",
     )?;
 
-    std::fs::write(&tmp.path().join("b/d/bd.txt"), "not a proto")?;
+    std::fs::write(tmp.path().join("b/d/bd.txt"), "not a proto")?;
 
-    let root_uri = Url::from_file_path(&tmp.path().join("root.proto")).unwrap();
+    let root_uri = Url::from_file_path(tmp.path().join("root.proto")).unwrap();
     let client = TestClient::new_with_root(&tmp)?;
 
     assert_eq!(
