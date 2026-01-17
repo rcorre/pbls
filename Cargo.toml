@@ -16,7 +16,7 @@ lsp-types = "0.94"
 lsp-server = "0.7"
 toml = "0.8"
 tree-sitter-protobuf = { git = "https://github.com/yusdacra/tree-sitter-protobuf", rev = "19c211a01434d9f03efff99f85e19f967591b175" }
-tree-sitter = "0.20"
+tree-sitter = "0.26"
 log = "0.4"
 env_logger = { version = "0.10.1", default-features = false }
 walkdir = "2.4"
