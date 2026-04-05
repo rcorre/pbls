@@ -355,7 +355,7 @@ fn test_diagnostics_on_open() -> pbls::Result<()> {
             diag(
                 error_uri(),
                 "int32 bar =",
-                "Field number 1 has already been used in \"main.Noo\" by field \"foo\"",
+                "Field number 1 has already been used in \"main.Noo\" by field \"foo\". Next available field number is 2",
             ),
         ],
         |s| s.message.clone(),
@@ -1132,12 +1132,12 @@ fn test_import_discovery() -> pbls::Result<()> {
     std::fs::write(
         tmp.path().join("root.proto"),
         r#"
-        syntax = "proto3"; 
+        syntax = "proto3";
 
-        import "sibling.proto"; 
-        import "a.proto"; 
-        import "af.proto"; 
-        import "bc.proto"; 
+        import "sibling.proto";
+        import "a.proto";
+        import "af.proto";
+        import "bc.proto";
 
         message Root{
             Sibling s = 1;

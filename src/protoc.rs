@@ -150,7 +150,7 @@ mod tests {
                     },
                     severity: Some(DiagnosticSeverity::ERROR),
                     source: Some("pbls".into()),
-                    message: "Field number 1 has already been used in \"Foo\" by field \"i\""
+                    message: "Field number 1 has already been used in \"Foo\" by field \"i\". Next available field number is 2"
                         .into(),
                     ..Default::default()
                 },
