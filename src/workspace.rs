@@ -120,7 +120,11 @@ impl Workspace {
         let text = std::fs::read_to_string(path)?;
         let file = file::File::new(text)?;
         let mut qc = tree_sitter::QueryCursor::new();
-        let imports = Vec::from_iter(file.imports(&mut qc).map(str::to_string));
+        let imports: Vec<String> = file
+            .imports(&mut qc)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
         self.files.insert(uri, file);
         for import in imports {
             self.open_import(import.as_str())?;
@@ -133,7 +137,11 @@ impl Workspace {
         let file = file::File::new(text)?;
 
         let mut qc = tree_sitter::QueryCursor::new();
-        let imports = Vec::from_iter(file.imports(&mut qc).map(str::to_string));
+        let imports: Vec<String> = file
+            .imports(&mut qc)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
 
         self.files.insert(uri.clone(), file);
 
@@ -162,7 +170,11 @@ impl Workspace {
         file.edit(changes)?;
 
         let mut qc = tree_sitter::QueryCursor::new();
-        let imports = Vec::from_iter(file.imports(&mut qc).map(str::to_string));
+        let imports: Vec<String> = file
+            .imports(&mut qc)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
 
         for import in imports {
             log::trace!("Loading new import {import:?}");
@@ -177,6 +189,7 @@ impl Workspace {
         Ok(self
             .get(uri)?
             .symbols(&mut qc)
+            .into_iter()
             .map(|s| to_lsp_symbol(uri.clone(), s))
             .collect())
     }
@@ -239,6 +252,7 @@ impl Workspace {
         for (uri, file) in &self.files {
             let symbols = file.symbols(&mut qc);
             let syms = symbols
+                .into_iter()
                 .filter(|s| regexes.iter().all(|r| r.is_match(&s.name)))
                 .map(|s| to_lsp_symbol(uri.clone(), s));
             res.extend(syms);
@@ -375,7 +389,9 @@ impl Workspace {
         if let Some(sym) = typ.parent.as_ref().and_then(|p| {
             let qualified = format!("{p}.{}", typ.name);
             log::trace!("Searching for {qualified} in {uri}");
-            file.symbols(&mut qc).find(|sym| sym.name == qualified)
+            file.symbols(&mut qc)
+                .into_iter()
+                .find(|sym| sym.name == qualified)
         }) {
             return Ok(Some(lsp_types::Location {
                 uri,
@@ -385,7 +401,11 @@ impl Workspace {
 
         log::trace!("Searching for {} in {uri}", typ.name);
         // Next look within the file for the unqualified name.
-        if let Some(sym) = file.symbols(&mut qc).find(|s| s.name == typ.name) {
+        if let Some(sym) = file
+            .symbols(&mut qc)
+            .into_iter()
+            .find(|s| s.name == typ.name)
+        {
             return Ok(Some(lsp_types::Location {
                 uri,
                 range: to_lsp_range(sym.range),
@@ -395,7 +415,11 @@ impl Workspace {
         // If the type is nested, try the fully qualified name
         log::trace!("Searching for {} in {uri}", typ.name);
         let mut qc = tree_sitter::QueryCursor::new();
-        if let Some(sym) = file.symbols(&mut qc).find(|s| s.name == typ.name) {
+        if let Some(sym) = file
+            .symbols(&mut qc)
+            .into_iter()
+            .find(|s| s.name == typ.name)
+        {
             return Ok(Some(lsp_types::Location {
                 uri,
                 range: to_lsp_range(sym.range),
@@ -406,6 +430,7 @@ impl Workspace {
         let mut qc = tree_sitter::QueryCursor::new();
         let imports = file
             .imports(&mut qc)
+            .into_iter()
             .filter_map(|name| self.find_import(name))
             .map(|path| Url::from_file_path(path).unwrap())
             .map(|uri| (uri.clone(), self.get(&uri).unwrap()));
@@ -417,12 +442,14 @@ impl Workspace {
             if let Some(sym) = if package == local_package {
                 log::trace!("Searching for {} in {uri} (same package)", typ.name);
                 // same package, match the name without the package prefix
-                file.symbols(&mut qc).find(|sym| sym.name == typ.name)
+                file.symbols(&mut qc)
+                    .into_iter()
+                    .find(|sym| sym.name == typ.name)
             } else if let Some(package) = package {
                 log::trace!("Searching for {} in {uri} (different package)", typ.name);
                 // different package, fully qualify the name
                 let local_package = local_package.unwrap_or("");
-                file.symbols(&mut qc).find(|sym| {
+                file.symbols(&mut qc).into_iter().find(|sym| {
                     let quals = possible_qualifiers(package, local_package);
                     log::trace!("Qualifiers: {quals:?}");
                     quals
@@ -437,7 +464,9 @@ impl Workspace {
             } else {
                 // target file has no package
                 log::trace!("Searching for {} in {uri}", typ.name);
-                file.symbols(&mut qc).find(|sym| sym.name == typ.name)
+                file.symbols(&mut qc)
+                    .into_iter()
+                    .find(|sym| sym.name == typ.name)
             } {
                 return Ok(Some(lsp_types::Location {
                     uri,
@@ -457,11 +486,13 @@ impl Workspace {
         let mut qc = QueryCursor::new();
         let mut items: Vec<_> = file
             .relative_symbols(base_name, &mut qc)
+            .into_iter()
             .map(to_lsp_completion)
             .collect();
 
         let imports = file
             .imports(&mut qc)
+            .into_iter()
             .filter_map(|name| self.find_import(name))
             .map(|path| Url::from_file_path(path).unwrap())
             .map(|uri| self.get(&uri).unwrap());
@@ -470,11 +501,12 @@ impl Workspace {
             let package = file.package();
             if package.is_none() || package == current_package {
                 let mut qc = tree_sitter::QueryCursor::new();
-                items.extend(file.symbols(&mut qc).map(to_lsp_completion));
+                items.extend(file.symbols(&mut qc).into_iter().map(to_lsp_completion));
             } else if let Some(package) = package {
                 let mut qc = tree_sitter::QueryCursor::new();
                 items.extend(
                     file.symbols(&mut qc)
+                        .into_iter()
                         .map(|s| file::Symbol {
                             name: package.to_owned() + "." + &s.name,
                             ..s
@@ -538,6 +570,7 @@ impl Workspace {
         let mut qc = tree_sitter::QueryCursor::new();
         let existing = file
             .imports(&mut qc)
+            .into_iter()
             .chain(std::iter::once(current))
             .collect::<Vec<_>>();
 

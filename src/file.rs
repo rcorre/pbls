@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use std::sync::OnceLock;
+use tree_sitter::StreamingIterator;
 
-fn language() -> tree_sitter::Language {
+fn language() -> &'static tree_sitter::Language {
     static LANGUAGE: OnceLock<tree_sitter::Language> = OnceLock::new();
-    *LANGUAGE.get_or_init(tree_sitter_protobuf::language)
+    LANGUAGE.get_or_init(|| tree_sitter_proto::LANGUAGE.into())
 }
 
 #[derive(Debug, PartialEq)]
@@ -121,83 +122,83 @@ impl File {
     pub fn package(&self) -> Option<&str> {
         static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
         let query = QUERY.get_or_init(|| {
-            tree_sitter::Query::new(language(), "(package (fullIdent (ident)) @id)").unwrap()
+            tree_sitter::Query::new(language(), "(package (full_ident) @id)").unwrap()
         });
 
         let mut qc = tree_sitter::QueryCursor::new();
-        let res = qc
-            .matches(query, self.tree.root_node(), self.text.as_bytes())
+        let mut matches = qc.matches(query, self.tree.root_node(), self.text.as_bytes());
+        matches
             .next()
             .map(|m| m.captures[0].node)
             .map(|n| self.get_text(n))
-            .map(|s| s.trim_matches('"'));
-        res
     }
 
-    pub fn imports<'this: 'cursor, 'cursor>(
-        &'this self,
-        qc: &'cursor mut tree_sitter::QueryCursor,
-    ) -> impl Iterator<Item = &'this str> + 'cursor {
+    pub fn imports(&self, qc: &mut tree_sitter::QueryCursor) -> Vec<&str> {
         static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
         let query = QUERY.get_or_init(|| {
-            tree_sitter::Query::new(language(), "(import (strLit) @path)").unwrap()
+            tree_sitter::Query::new(language(), "(import (string) @path)").unwrap()
         });
 
-        qc.matches(query, self.tree.root_node(), self.text.as_bytes())
-            .map(|m| m.captures[0].node)
-            .map(|n| self.get_text(n))
-            .map(|s| s.trim_matches('"'))
+        let mut matches = qc.matches(query, self.tree.root_node(), self.text.as_bytes());
+        let mut result = Vec::new();
+        while let Some(m) = matches.next() {
+            result.push(self.get_text(m.captures[0].node).trim_matches('"'));
+        }
+        result
     }
 
-    pub fn symbols<'this: 'cursor, 'cursor>(
-        &'this self,
-        qc: &'cursor mut tree_sitter::QueryCursor,
-    ) -> impl Iterator<Item = Symbol> + 'cursor {
+    pub fn symbols(&self, qc: &mut tree_sitter::QueryCursor) -> Vec<Symbol> {
         static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
         let query = QUERY.get_or_init(|| {
             tree_sitter::Query::new(
                 language(),
                 "[
-                     (message (messageName (ident) @id))
-                     (enum (enumName (ident) @id))
+                     (message (message_name (identifier) @id))
+                     (enum (enum_name (identifier) @id))
                  ] @def",
             )
             .unwrap()
         });
 
-        qc.matches(query, self.tree.root_node(), self.text.as_bytes())
-            .map(|m| (m.captures[0].node, m.captures[1].node))
-            .map(|(def, id)| {
-                let name = self.get_text(id);
-                let name = if let Some(p) = self.parent_name(def) {
-                    p + "." + name
-                } else {
-                    name.to_string()
-                };
-                Symbol {
-                    kind: match def.kind() {
-                        "message" => SymbolKind::Message,
-                        _ => SymbolKind::Enum,
-                    },
-                    name,
-                    range: def.range(),
-                }
-            })
+        let mut matches = qc.matches(query, self.tree.root_node(), self.text.as_bytes());
+        let mut result = Vec::new();
+        while let Some(m) = matches.next() {
+            let def = m.captures[0].node;
+            let id = m.captures[1].node;
+            let name = self.get_text(id).to_string();
+            let name = if let Some(p) = self.parent_name(def) {
+                p + "." + &name
+            } else {
+                name
+            };
+            result.push(Symbol {
+                kind: match def.kind() {
+                    "message" => SymbolKind::Message,
+                    _ => SymbolKind::Enum,
+                },
+                name,
+                range: def.range(),
+            });
+        }
+        result
     }
 
     // Return all symbols adjusted relative to a message.
     // For example, given base_name=Foo.Bar:
     // symbols()          -> [Foo, Foo.Bar, Foo.Bar.Baz, Foo.Bar.Baz.Biz]
     // relative_symbols() -> [Foo, Bar    , Baz        , Baz.Biz]
-    pub fn relative_symbols<'this: 'cursor, 'cursor>(
-        &'this self,
-        base_name: &'this str,
-        qc: &'cursor mut tree_sitter::QueryCursor,
-    ) -> impl Iterator<Item = Symbol> + 'cursor {
-        self.symbols(qc).map(|s| Symbol {
-            name: relative_name(base_name, &s.name),
-            ..s
-        })
+    pub fn relative_symbols(
+        &self,
+        base_name: &str,
+        qc: &mut tree_sitter::QueryCursor,
+    ) -> Vec<Symbol> {
+        self.symbols(qc)
+            .into_iter()
+            .map(|s| Symbol {
+                name: relative_name(base_name, &s.name),
+                ..s
+            })
+            .collect()
     }
 
     // Given an "ident" or "enumMessageType", node representing a type, find the name of the type.
@@ -205,14 +206,14 @@ impl File {
         log::trace!("Finding type of {node:?}");
         match node {
             None => None,
-            Some(n) if n.kind() == "type" || n.kind() == "enumMessageType" => {
+            Some(n) if n.kind() == "type" || n.kind() == "message_or_enum_type" => {
                 Some(self.get_text(n))
             }
             Some(n) => self.field_type(n.parent()),
         }
     }
 
-    fn parent_context(&self, node: Option<tree_sitter::Node>) -> Option<CompletionContext> {
+    fn parent_context(&self, node: Option<tree_sitter::Node<'_>>) -> Option<CompletionContext<'_>> {
         log::trace!(
             "Checking parent context: {node:?} - {}",
             node.map_or("".into(), |n| n.to_sexp())
@@ -221,23 +222,57 @@ impl File {
             // Hit the document root
             None => None,
             // Don't complete if we're typing a field name or number
-            Some(n) if n.kind() == "fieldName" => None,
-            Some(n) if n.kind() == "enumBody" => n
+            // Don't complete field names (parent is a named field node)
+            Some(n)
+                if n.kind() == "identifier"
+                    && n.parent().is_some_and(|p| {
+                        matches!(p.kind(), "field" | "oneof_field" | "map_field")
+                    }) =>
+            {
+                None
+            }
+            // Don't complete field names in error-recovered incomplete fields:
+            // identifier immediately following a `type` sibling is a field name
+            Some(n)
+                if n.kind() == "identifier"
+                    && n.prev_named_sibling().is_some_and(|s| s.kind() == "type") =>
+            {
+                None
+            }
+            Some(n)
+                if n.kind() == "message_name"
+                    || n.kind() == "enum_name"
+                    || n.kind() == "service_name" =>
+            {
+                None
+            }
+            Some(n) if n.kind() == "enum_body" => n
                 .parent() // enum
                 .and_then(|p| self.type_name(p))
                 .map(CompletionContext::Enum),
-            Some(n) if n.kind() == "messageBody" => n
+            // Fallback: reach the enum node directly when enum_body is absent (error recovery)
+            Some(n) if n.kind() == "enum" => self.type_name(n).map(CompletionContext::Enum),
+            Some(n) if n.kind() == "message_body" => n
                 .parent() // message
                 .and_then(|p| self.type_name(p))
                 .map(CompletionContext::Message),
-            Some(n) if n.kind() == "serviceBody" => Some(CompletionContext::Rpc),
+            // Fallback: reach the message node directly when message_body is absent
+            Some(n) if n.kind() == "message" => self.type_name(n).map(CompletionContext::Message),
+            // In the new grammar there is no service_body wrapper; rpc nodes are direct children
+            Some(n) if n.kind() == "service" => Some(CompletionContext::Rpc),
+            // ERROR containing "oneof <name>" means we're typing an oneof name, not a type
+            Some(n) if n.is_error() && self.get_text(n).starts_with("oneof ") => None,
             Some(n) => self.parent_context(n.parent()),
         }
     }
 
-    pub fn completion_context(&self, row: usize, col: usize) -> Result<Option<CompletionContext>> {
-        if self.tree.root_node().kind() != "source_file" {
-            // If the whole document is invalid, we need to define a syntax.
+    pub fn completion_context(
+        &self,
+        row: usize,
+        col: usize,
+    ) -> Result<Option<CompletionContext<'_>>> {
+        if self.tree.root_node().kind() != "source_file" || self.text.trim().is_empty() {
+            // If the whole document is invalid or empty, we need to define a syntax.
             return Ok(Some(CompletionContext::Syntax));
         }
 
@@ -265,8 +300,10 @@ impl File {
         Ok(if node.kind() == "option" {
             // option | -> (option)
             Some(CompletionContext::Option)
-        } else if is_sexp(node, &["optionName", "fullIdent", "ident"]) {
-            // option c| -> (option (optionName (fullIdent (ident))))
+        } else if is_sexp(node, &["option", "identifier"])
+            || is_sexp(node, &["option", "full_ident", "identifier"])
+        {
+            // option c| -> (option (identifier)) or (option (full_ident (identifier)))
             Some(CompletionContext::Option)
         } else if (node.is_error() && self.get_text(node).starts_with("option "))
             || node
@@ -278,15 +315,21 @@ impl File {
         } else if node.is_error() && self.get_text(node).starts_with("import ") {
             // import "| -> (ERROR)
             Some(CompletionContext::Import)
-        } else if is_sexp(node, &["import", "strLit"]) {
-            // import "foo|.proto" -> (import (strLit))
+        } else if is_sexp(node, &["import", "string"]) {
+            // import "foo|.proto" -> (import (string))
             Some(CompletionContext::Import)
-        } else if (node.kind() == "ident" || node.kind() == "type")
-            && node.parent().is_none_or(|p| p.kind() != "oneofName")
+        } else if node.kind() == "type"
+            || (node.kind() == "identifier" && !node.parent().is_some_and(|p| p.kind() == "oneof"))
         {
-            // message Foo { Bar| -> (ident)
-            // message Foo { string| -> (type (string))
+            // message Foo { Bar| -> (identifier)
+            // message Foo { string| -> (type)
             self.parent_context(Some(node))
+        } else if node.is_error() && !is_top_level_error(node) && !self.get_text(node).contains('=')
+        {
+            // Nested ERROR node (e.g. a new identifier being typed inside enum_body/message_body).
+            // If the error text contains '=', we are in a partial assignment (value position) where
+            // no type completion is appropriate.
+            self.parent_context(node.parent())
         } else if is_top_level_error(node) {
             // typically means we're typing the first word of a line
             // mes| -> (source_file (ERROR (ERROR)))
@@ -330,46 +373,49 @@ impl File {
         log::trace!("Searching for references to {typ} in package {pkg:?}");
 
         let mut qc = tree_sitter::QueryCursor::new();
-        qc.matches(query, self.tree.root_node(), self.text.as_bytes())
-            .map(|m| m.captures[0].node)
-            .inspect(|x| log::trace!("Check {x:?}: {} == {typ}", self.get_text(*x)))
-            .filter(|node| {
-                let text = self.get_text(*node);
-                // first check the fully qualified name
-                text == typ
-                    || match pkg {
-                        // If we have a package, try stripping that, in case we're in the same package
-                        Some(pkg) => {
-                            log::trace!(
-                                "Trying to match '{typ}' to '{text}' without package {pkg}"
-                            );
-                            text.strip_prefix(pkg)
-                                .and_then(|text| text.strip_prefix("."))
-                                .map(|text| typ == text)
-                                .unwrap_or(false)
-                        }
-                        None => false,
+        let mut matches = qc.matches(query, self.tree.root_node(), self.text.as_bytes());
+        let mut result = Vec::new();
+        while let Some(m) = matches.next() {
+            let node = m.captures[0].node;
+            log::trace!("Check {node:?}: {} == {typ}", self.get_text(node));
+            let text = self.get_text(node);
+            let matches = text == typ
+                || match pkg {
+                    Some(pkg) => {
+                        log::trace!("Trying to match '{typ}' to '{text}' without package {pkg}");
+                        text.strip_prefix(pkg)
+                            .and_then(|text| text.strip_prefix("."))
+                            .map(|text| typ == text)
+                            .unwrap_or(false)
                     }
-            })
-            .map(|node| node.range())
-            .collect()
+                    None => false,
+                };
+            if matches {
+                result.push(node.range());
+            }
+        }
+        result
     }
 
     pub fn import_references(&self, file: &str) -> Vec<tree_sitter::Range> {
         static QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
         let query = QUERY.get_or_init(|| {
-            tree_sitter::Query::new(language(), "(import (strLit) @name)").unwrap()
+            tree_sitter::Query::new(language(), "(import (string) @name)").unwrap()
         });
 
         let mut qc = tree_sitter::QueryCursor::new();
-        qc.matches(query, self.tree.root_node(), self.text.as_bytes())
-            .map(|m| m.captures[0].node)
-            .filter(|n| self.get_text(*n).trim_matches('"') == file)
-            .map(|n| n.range())
-            .collect()
+        let mut matches = qc.matches(query, self.tree.root_node(), self.text.as_bytes());
+        let mut result = Vec::new();
+        while let Some(m) = matches.next() {
+            let n = m.captures[0].node;
+            if self.get_text(n).trim_matches('"') == file {
+                result.push(n.range());
+            }
+        }
+        result
     }
 
-    pub fn type_at(&self, row: usize, column: usize) -> Option<GotoContext> {
+    pub fn type_at(&self, row: usize, column: usize) -> Option<GotoContext<'_>> {
         log::trace!("Getting type at row: {row} col: {column}");
 
         let pos = tree_sitter::Point { row, column };
@@ -380,13 +426,13 @@ impl File {
 
         log::debug!("Getting type at node: {node:?} parent: {:?}", node.parent());
 
-        if node.kind() == "strLit" && node.parent().is_some_and(|p| p.kind() == "import") {
+        if node.kind() == "string" && node.parent().is_some_and(|p| p.kind() == "import") {
             return Some(GotoContext::Import(self.get_text(node).trim_matches('"')));
         }
 
         // Cursor is over a message or enum name.
-        if is_sexp(node, &["enum", "enumName", "ident"])
-            || is_sexp(node, &["message", "messageName", "ident"])
+        if is_sexp(node, &["enum", "enum_name", "identifier"])
+            || is_sexp(node, &["message", "message_name", "identifier"])
         {
             return Some(GotoContext::Type(GotoTypeContext {
                 name: self.get_text(node.parent().unwrap()),
@@ -395,7 +441,7 @@ impl File {
         }
 
         // Cursor is over a field type.
-        if node.kind() == "ident" || node.kind() == "enumMessageType" {
+        if node.kind() == "identifier" || node.kind() == "message_or_enum_type" {
             if let Some(name) = self.field_type(Some(node)) {
                 return Some(GotoContext::Type(GotoTypeContext {
                     name,
@@ -438,7 +484,7 @@ impl File {
         );
         let mut cursor = node.walk();
         let child = node.named_children(&mut cursor).find(|c| {
-            c.kind() == "messageName" || c.kind() == "enumName" || c.kind() == "serviceName"
+            c.kind() == "message_name" || c.kind() == "enum_name" || c.kind() == "service_name"
         });
         child.and_then(|c| c.utf8_text(self.text.as_bytes()).ok())
     }
@@ -587,17 +633,14 @@ mod tests {
         "#;
         let file = File::new(text.to_string()).unwrap();
         let mut qc = tree_sitter::QueryCursor::new();
-        assert_eq!(
-            file.imports(&mut qc).collect::<Vec<_>>(),
-            vec!["foo.proto", "bar.proto"]
-        );
+        assert_eq!(file.imports(&mut qc), vec!["foo.proto", "bar.proto"]);
     }
 
     #[test]
     fn test_symbols() {
         let _ = env_logger::builder().is_test(true).try_init();
         let text = r#"
-            syntax="proto3"; 
+            syntax="proto3";
             package main;
             message Foo{}
             enum Bar{}
@@ -610,14 +653,14 @@ mod tests {
         let file = File::new(text.to_string()).unwrap();
         let mut qc = tree_sitter::QueryCursor::new();
         assert_eq!(
-            file.symbols(&mut qc).collect::<Vec<_>>(),
+            file.symbols(&mut qc),
             vec![
                 Symbol {
                     kind: SymbolKind::Message,
                     name: "Foo".into(),
                     range: tree_sitter::Range {
-                        start_byte: 69,
-                        end_byte: 82,
+                        start_byte: 68,
+                        end_byte: 81,
                         start_point: Point { row: 3, column: 12 },
                         end_point: Point { row: 3, column: 25 },
                     },
@@ -626,8 +669,8 @@ mod tests {
                     kind: SymbolKind::Enum,
                     name: "Bar".into(),
                     range: tree_sitter::Range {
-                        start_byte: 95,
-                        end_byte: 105,
+                        start_byte: 94,
+                        end_byte: 104,
                         start_point: Point { row: 4, column: 12 },
                         end_point: Point { row: 4, column: 22 },
                     },
@@ -636,8 +679,8 @@ mod tests {
                     kind: SymbolKind::Message,
                     name: "Baz".into(),
                     range: tree_sitter::Range {
-                        start_byte: 118,
-                        end_byte: 225,
+                        start_byte: 117,
+                        end_byte: 224,
                         start_point: Point { row: 5, column: 12 },
                         end_point: Point { row: 9, column: 13 },
                     },
@@ -646,8 +689,8 @@ mod tests {
                     kind: SymbolKind::Message,
                     name: "Baz.Biz".into(),
                     range: tree_sitter::Range {
-                        start_byte: 147,
-                        end_byte: 211,
+                        start_byte: 146,
+                        end_byte: 210,
                         start_point: Point { row: 6, column: 16 },
                         end_point: Point { row: 8, column: 17 },
                     },
@@ -656,8 +699,8 @@ mod tests {
                     kind: SymbolKind::Message,
                     name: "Baz.Biz.Buz".into(),
                     range: tree_sitter::Range {
-                        start_byte: 180,
-                        end_byte: 193,
+                        start_byte: 179,
+                        end_byte: 192,
                         start_point: Point { row: 7, column: 20 },
                         end_point: Point { row: 7, column: 33 },
                     },
@@ -670,7 +713,7 @@ mod tests {
     fn test_relative_symbols() {
         let _ = env_logger::builder().is_test(true).try_init();
         let text = r#"
-            syntax="proto3"; 
+            syntax="proto3";
             package main;
             message Foo{}
             enum Bar{}
@@ -681,14 +724,14 @@ mod tests {
         let file = File::new(text.to_string()).unwrap();
         let mut qc = tree_sitter::QueryCursor::new();
         assert_eq!(
-            file.relative_symbols("Foo", &mut qc).collect::<Vec<_>>(),
+            file.relative_symbols("Foo", &mut qc),
             vec![
                 Symbol {
                     kind: SymbolKind::Message,
                     name: "Foo".into(),
                     range: tree_sitter::Range {
-                        start_byte: 69,
-                        end_byte: 82,
+                        start_byte: 68,
+                        end_byte: 81,
                         start_point: Point { row: 3, column: 12 },
                         end_point: Point { row: 3, column: 25 },
                     },
@@ -697,8 +740,8 @@ mod tests {
                     kind: SymbolKind::Enum,
                     name: "Bar".into(),
                     range: tree_sitter::Range {
-                        start_byte: 95,
-                        end_byte: 105,
+                        start_byte: 94,
+                        end_byte: 104,
                         start_point: Point { row: 4, column: 12 },
                         end_point: Point { row: 4, column: 22 },
                     },
@@ -707,8 +750,8 @@ mod tests {
                     kind: SymbolKind::Message,
                     name: "Baz".into(),
                     range: tree_sitter::Range {
-                        start_byte: 118,
-                        end_byte: 174,
+                        start_byte: 117,
+                        end_byte: 173,
                         start_point: Point { row: 5, column: 12 },
                         end_point: Point { row: 7, column: 13 },
                     },
@@ -717,8 +760,8 @@ mod tests {
                     kind: SymbolKind::Message,
                     name: "Baz.Biz".into(),
                     range: tree_sitter::Range {
-                        start_byte: 147,
-                        end_byte: 160,
+                        start_byte: 146,
+                        end_byte: 159,
                         start_point: Point { row: 6, column: 16 },
                         end_point: Point { row: 6, column: 29 },
                     },
