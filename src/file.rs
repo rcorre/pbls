@@ -21,9 +21,30 @@ pub struct Symbol {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct FieldNumberContext {
+    pub used: Vec<u32>,
+    pub reserved: Vec<std::ops::RangeInclusive<u32>>,
+}
+
+impl FieldNumberContext {
+    pub fn next_free(&self) -> u32 {
+        let mut candidate = 1u32;
+        loop {
+            if !self.used.contains(&candidate)
+                && !self.reserved.iter().any(|r| r.contains(&candidate))
+            {
+                return candidate;
+            }
+            candidate += 1;
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub enum CompletionContext<'a> {
     Message(&'a str),
     Enum(&'a str),
+    FieldNumber(FieldNumberContext),
     Rpc,
     Import,
     Keyword,
@@ -266,6 +287,93 @@ impl File {
         }
     }
 
+    fn extract_field_number(&self, node: tree_sitter::Node) -> Option<u32> {
+        let mut cursor = node.walk();
+        // Assign to a variable so the iterator (and its borrow of `cursor`) is dropped before
+        // we create a second cursor below.
+        let fn_node = node
+            .named_children(&mut cursor)
+            .find(|c| c.kind() == "field_number")?;
+        let mut c2 = fn_node.walk();
+        let int_node = fn_node
+            .named_children(&mut c2)
+            .find(|c| c.kind() == "int_lit")?;
+        self.get_text(int_node).parse::<u32>().ok()
+    }
+
+    fn collect_field_numbers(&self, message_body: tree_sitter::Node) -> FieldNumberContext {
+        let mut used = Vec::new();
+        let mut reserved = Vec::new();
+        let mut cursor = message_body.walk();
+
+        for child in message_body.named_children(&mut cursor) {
+            match child.kind() {
+                "field" | "map_field" => {
+                    if let Some(num) = self.extract_field_number(child) {
+                        used.push(num);
+                    }
+                }
+                "oneof" => {
+                    let mut c2 = child.walk();
+                    for oneof_child in child.named_children(&mut c2) {
+                        if oneof_child.kind() == "oneof_field" {
+                            if let Some(num) = self.extract_field_number(oneof_child) {
+                                used.push(num);
+                            }
+                        }
+                    }
+                }
+                "reserved" => {
+                    let mut c2 = child.walk();
+                    for ranges_node in child.named_children(&mut c2) {
+                        if ranges_node.kind() == "ranges" {
+                            let mut c3 = ranges_node.walk();
+                            for range_node in ranges_node.named_children(&mut c3) {
+                                if range_node.kind() == "range" {
+                                    let mut c4 = range_node.walk();
+                                    let ints: Vec<u32> = range_node
+                                        .named_children(&mut c4)
+                                        .filter(|c| c.kind() == "int_lit")
+                                        .filter_map(|c| self.get_text(c).parse::<u32>().ok())
+                                        .collect();
+                                    match ints.as_slice() {
+                                        [n] => reserved.push(*n..=*n),
+                                        [low, high] => reserved.push(*low..=*high),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        FieldNumberContext { used, reserved }
+    }
+
+    fn field_number_completion_context(
+        &self,
+        node: tree_sitter::Node,
+    ) -> Option<CompletionContext<'_>> {
+        let mut n = Some(node);
+        while let Some(current) = n {
+            match current.kind() {
+                "message_body" => {
+                    return Some(CompletionContext::FieldNumber(
+                        self.collect_field_numbers(current),
+                    ));
+                }
+                // Don't cross into enum body — enum field numbers are semantic values, not positions
+                "enum_body" => return None,
+                _ => {}
+            }
+            n = current.parent();
+        }
+        None
+    }
+
     pub fn completion_context(
         &self,
         row: usize,
@@ -324,6 +432,25 @@ impl File {
             // message Foo { Bar| -> (identifier)
             // message Foo { string| -> (type)
             self.parent_context(Some(node))
+        } else if is_sexp(node, &["field_number", "int_lit"])
+            || is_sexp(node, &["field_number", "int_lit", "decimal_lit"])
+        {
+            // message Foo { string d = 1| -> (field (field_number (int_lit (decimal_lit))))
+            self.field_number_completion_context(node)
+        } else if let Some(ctx) = {
+            // Cursor is after '=' on a field number position. This covers several parse states:
+            //   - ERROR node (incomplete field): node text contains '='
+            //   - field/message_body node: space after '=' lands on a non-ERROR node
+            // Check the line before the cursor ends with '=' then walk up for message_body.
+            let line = self.text.lines().nth(row).unwrap_or("");
+            let before: String = line.chars().take(col).collect();
+            if before.trim_end().ends_with('=') {
+                self.field_number_completion_context(node)
+            } else {
+                None
+            }
+        } {
+            Some(ctx)
         } else if node.is_error() && !is_top_level_error(node) && !self.get_text(node).contains('=')
         {
             // Nested ERROR node (e.g. a new identifier being typed inside enum_body/message_body).
@@ -951,13 +1078,99 @@ mod tests {
         test(&["message Foo{ Bar bar |}"], None);
         test(&["message Foo{ Bar bar | }"], None);
         test(&["message Foo{ Bar bar |= }"], None);
-        test(&["message Foo{ Bar bar =| }"], None);
-        test(&["message Foo{ Bar bar = | }"], None);
-        test(&["message Foo{ Bar bar = |1 }"], None);
-        test(&["message Foo{ Bar bar = 1| }"], None);
-        test(&["message Foo{ Bar bar = 1|; }"], None);
+        test(
+            &["message Foo{ Bar bar =| }"],
+            Some(CompletionContext::FieldNumber(FieldNumberContext {
+                used: vec![],
+                reserved: vec![],
+            })),
+        );
+        test(
+            &["message Foo{ Bar bar = | }"],
+            Some(CompletionContext::FieldNumber(FieldNumberContext {
+                used: vec![],
+                reserved: vec![],
+            })),
+        );
+        test(
+            &["message Foo{ Bar bar = |1 }"],
+            Some(CompletionContext::FieldNumber(FieldNumberContext {
+                used: vec![1],
+                reserved: vec![],
+            })),
+        );
+        test(
+            &["message Foo{ Bar bar = 1| }"],
+            Some(CompletionContext::FieldNumber(FieldNumberContext {
+                used: vec![1],
+                reserved: vec![],
+            })),
+        );
+        test(
+            &["message Foo{ Bar bar = 1|; }"],
+            Some(CompletionContext::FieldNumber(FieldNumberContext {
+                used: vec![1],
+                reserved: vec![],
+            })),
+        );
         test(&["message Foo{ Bar bar = 1;| }"], None);
         test(&["message Foo{ oneof th| }"], None);
+        // Enum values should NOT trigger field number completion
+        test(&["enum Foo{ BAR = | }"], None);
+        test(&["enum Foo{ BAR = |0 }"], None);
+    }
+
+    #[test]
+    fn test_field_number_context() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        fn next_free(lines: &[&str]) -> u32 {
+            let text = format!("syntax = \"proto3\";\n{}\n", lines.join("\n"));
+            let (file, point) = cursor(text.as_str());
+            match file.completion_context(point.row, point.column).unwrap() {
+                Some(CompletionContext::FieldNumber(ctx)) => ctx.next_free(),
+                other => panic!("Expected FieldNumber, got {other:?}"),
+            }
+        }
+
+        // Simple: next after existing fields (} on same line)
+        assert_eq!(
+            next_free(&["message Foo { int32 a = 1; int32 b = 2; int32 c = | }"]),
+            3
+        );
+        // Cursor at end of line, } on next line
+        assert_eq!(
+            next_free(&["message Foo {", "  int32 a = 1;", "  int32 c = |", "}"]),
+            2
+        );
+        // Gap: skips reserved single number
+        assert_eq!(
+            next_free(&["message Foo { reserved 2; int32 a = 1; int32 c = | }"]),
+            3
+        );
+        // Gap: skips reserved range
+        assert_eq!(
+            next_free(&["message Foo { reserved 2 to 4; int32 a = 1; int32 c = | }"]),
+            5
+        );
+        // Finds first gap between existing fields
+        assert_eq!(
+            next_free(&["message Foo { int32 a = 1; int32 c = 3; int32 d = | }"]),
+            2
+        );
+        // Skips multiple reserved ranges and used numbers
+        assert_eq!(
+            next_free(&[
+                "message Foo {",
+                "  reserved 4, 6 to 8;",
+                "  int32 a = 1;",
+                "  int32 b = 2;",
+                "  int32 c = 3;",
+                "  string d = |",
+                "}"
+            ]),
+            5
+        );
     }
 
     #[test]

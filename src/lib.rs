@@ -228,7 +228,7 @@ pub fn run(connection: Connection) -> Result<()> {
         )),
         definition_provider: Some(OneOf::Left(true)),
         completion_provider: Some(lsp_types::CompletionOptions {
-            trigger_characters: Some(vec!["\"".into()]),
+            trigger_characters: Some(vec!["\"".into(), "=".into(), " ".into()]),
             ..Default::default()
         }),
         diagnostic_provider: Some(DiagnosticServerCapabilities::Options(

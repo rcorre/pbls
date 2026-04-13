@@ -273,6 +273,17 @@ impl Workspace {
         match file.completion_context(line, character)? {
             Some(file::CompletionContext::Message(msg)) => self.complete_types(msg, file),
             Some(file::CompletionContext::Enum(_)) => Ok(None), // TODO
+            Some(file::CompletionContext::FieldNumber(ctx)) => {
+                let next = ctx.next_free();
+                Ok(Some(lsp_types::CompletionResponse::Array(vec![
+                    lsp_types::CompletionItem {
+                        label: next.to_string(),
+                        kind: Some(lsp_types::CompletionItemKind::VALUE),
+                        detail: Some("Next available field number".to_string()),
+                        ..Default::default()
+                    },
+                ])))
+            }
             Some(file::CompletionContext::Keyword) => Ok(complete_keywords()),
             Some(file::CompletionContext::Import) => self.complete_imports(uri),
             Some(file::CompletionContext::Option) => {
@@ -858,6 +869,64 @@ mod tests {
                     })
                     .collect()
             )
+        );
+    }
+
+    #[test]
+    fn test_complete_field_number() {
+        let (mut ws, tmp) = setup();
+        // } on same line as incomplete field
+        let (uri, text) = proto(
+            &tmp,
+            "foo.proto",
+            &[
+                "syntax = \"proto3\";",
+                "message Foo {",
+                "  reserved 4, 6 to 8;",
+                "  int32 a = 1;",
+                "  int32 b = 2;",
+                "  int32 c = 3;",
+                "  string d = }",
+            ],
+        );
+        ws.open(uri.clone(), text).unwrap();
+        let result = ws.complete(&uri, 6, "  string d = ".len()).unwrap();
+        assert_eq!(
+            result,
+            Some(lsp_types::CompletionResponse::Array(vec![
+                lsp_types::CompletionItem {
+                    label: "5".into(),
+                    kind: Some(lsp_types::CompletionItemKind::VALUE),
+                    detail: Some("Next available field number".into()),
+                    ..Default::default()
+                },
+            ]))
+        );
+
+        // } on next line (real-world layout)
+        let (uri2, text2) = proto(
+            &tmp,
+            "bar.proto",
+            &[
+                "syntax = \"proto3\";",
+                "message Foo {",
+                "  int32 a = 1;",
+                "  string d = ",
+                "}",
+            ],
+        );
+        ws.open(uri2.clone(), text2).unwrap();
+        let result2 = ws.complete(&uri2, 3, "  string d = ".len()).unwrap();
+        assert_eq!(
+            result2,
+            Some(lsp_types::CompletionResponse::Array(vec![
+                lsp_types::CompletionItem {
+                    label: "2".into(),
+                    kind: Some(lsp_types::CompletionItemKind::VALUE),
+                    detail: Some("Next available field number".into()),
+                    ..Default::default()
+                },
+            ]))
         );
     }
 
