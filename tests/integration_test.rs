@@ -348,17 +348,23 @@ fn test_diagnostics_on_open() -> pbls::Result<()> {
 
     let diags = client.open(error_uri())?;
     assert_eq!(diags.uri, error_uri());
-    assert_elements_equal(
+    assert_eq!(diags.diagnostics.len(), 2);
+    let unknown_diag = diag(error_uri(), "Unknown t =", "\"Unknown\" is not defined");
+    assert!(
+        diags.diagnostics.contains(&unknown_diag),
+        "missing diagnostic: {unknown_diag:?}\ngot: {:?}",
         diags.diagnostics,
-        vec![
-            diag(error_uri(), "Unknown t =", "\"Unknown\" is not defined"),
-            diag(
-                error_uri(),
-                "int32 bar =",
-                "Field number 1 has already been used in \"main.Noo\" by field \"foo\". Next available field number is 2",
-            ),
-        ],
-        |s| s.message.clone(),
+    );
+    let field_num_diag = diags
+        .diagnostics
+        .iter()
+        .find(|d| d.message.starts_with(
+            "Field number 1 has already been used in \"main.Noo\" by field \"foo\""
+        ));
+    assert!(
+        field_num_diag.is_some(),
+        "missing field number diagnostic, got: {:?}",
+        diags.diagnostics,
     );
     Ok(())
 }

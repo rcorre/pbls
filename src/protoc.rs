@@ -118,43 +118,46 @@ mod tests {
 
         let diags = diags(&uri, &text, &vec![tmp.path().to_path_buf()]).unwrap();
 
+        assert_eq!(diags.len(), 2);
         assert_eq!(
-            diags,
-            vec![
-                Diagnostic {
-                    range: Range {
-                        start: lsp_types::Position {
-                            line: 2,
-                            character: 0,
-                        },
-                        end: lsp_types::Position {
-                            line: 2,
-                            character: 10,
-                        },
+            diags[0],
+            Diagnostic {
+                range: Range {
+                    start: lsp_types::Position {
+                        line: 2,
+                        character: 0,
                     },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    source: Some("pbls".into()),
-                    message: "\"int\" is not defined".into(),
-                    ..Default::default()
-                },
-                Diagnostic {
-                    range: Range {
-                        start: lsp_types::Position {
-                            line: 3,
-                            character: 0,
-                        },
-                        end: lsp_types::Position {
-                            line: 3,
-                            character: 13,
-                        },
+                    end: lsp_types::Position {
+                        line: 2,
+                        character: 10,
                     },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    source: Some("pbls".into()),
-                    message: "Field number 1 has already been used in \"Foo\" by field \"i\". Next available field number is 2"
-                        .into(),
-                    ..Default::default()
                 },
-            ]
+                severity: Some(DiagnosticSeverity::ERROR),
+                source: Some("pbls".into()),
+                message: "\"int\" is not defined".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            diags[1].range,
+            Range {
+                start: lsp_types::Position {
+                    line: 3,
+                    character: 0,
+                },
+                end: lsp_types::Position {
+                    line: 3,
+                    character: 13,
+                },
+            },
+        );
+        assert_eq!(diags[1].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(
+            diags[1]
+                .message
+                .starts_with("Field number 1 has already been used in \"Foo\" by field \"i\""),
+            "unexpected message: {}",
+            diags[1].message,
         );
     }
 

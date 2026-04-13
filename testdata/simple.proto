@@ -27,8 +27,6 @@ message Bar {
   Foo.Buz buz = 3;
   other.Other.Nested other_nested = 4;
   folder.stuff.Stuff stuff = 5;
-  string s = 6;
-  int foo = 7;
 }
 
 message Empty {}
