@@ -185,12 +185,12 @@ impl Workspace {
     }
 
     pub fn symbols(&self, uri: &Url) -> Result<Vec<SymbolInformation>> {
+        let file = self.get(uri)?;
         let mut qc = tree_sitter::QueryCursor::new();
-        Ok(self
-            .get(uri)?
+        Ok(file
             .symbols(&mut qc)
             .into_iter()
-            .map(|s| to_lsp_symbol(uri.clone(), s))
+            .map(|s| to_lsp_symbol(uri.clone(), s, file))
             .collect())
     }
 
@@ -254,7 +254,7 @@ impl Workspace {
             let syms = symbols
                 .into_iter()
                 .filter(|s| regexes.iter().all(|r| r.is_match(&s.name)))
-                .map(|s| to_lsp_symbol(uri.clone(), s));
+                .map(|s| to_lsp_symbol(uri.clone(), s, file));
             res.extend(syms);
         }
         Ok(res)
@@ -263,14 +263,14 @@ impl Workspace {
     pub fn complete(
         &self,
         uri: &Url,
-        line: usize,
-        character: usize,
+        pos: lsp_types::Position,
     ) -> Result<Option<lsp_types::CompletionResponse>> {
         let file = self
             .files
             .get(uri)
             .with_context(|| format!("Completion requested on file with no tree for {uri}"))?;
-        match file.completion_context(line, character)? {
+        let point = file.lsp_to_ts_pos(pos);
+        match file.completion_context(point.row, point.column)? {
             Some(file::CompletionContext::Message(msg)) => self.complete_types(msg, file),
             Some(file::CompletionContext::Enum(_)) => Ok(None), // TODO
             Some(file::CompletionContext::FieldNumber(ctx)) => {
@@ -324,7 +324,8 @@ impl Workspace {
     // Return the relative paths of proto files under the given dir.
     pub fn goto(&self, uri: Url, pos: lsp_types::Position) -> Result<Option<lsp_types::Location>> {
         let file = self.get(&uri)?;
-        let ctx = file.type_at(pos.line.try_into()?, pos.character.try_into()?);
+        let point = file.lsp_to_ts_pos(pos);
+        let ctx = file.type_at(point.row, point.column);
         log::debug!("Finding definition for {ctx:?}");
         match ctx {
             None => Ok(None),
@@ -348,11 +349,9 @@ impl Workspace {
         let doc = params.text_document_position;
         let uri = &doc.text_document.uri;
         let file = self.get(uri)?;
+        let point = file.lsp_to_ts_pos(doc.position);
 
-        let Some(item) = file.type_at(
-            doc.position.line.try_into()?,
-            doc.position.character.try_into()?,
-        ) else {
+        let Some(item) = file.type_at(point.row, point.column) else {
             return Ok(None);
         };
 
@@ -368,7 +367,7 @@ impl Workspace {
                     res.extend(file.type_references(pkg, t).iter().map(|range| {
                         lsp_types::Location {
                             uri: uri.clone(),
-                            range: to_lsp_range(*range),
+                            range: file.ts_to_lsp_range(*range),
                         }
                     }));
                 }
@@ -378,7 +377,7 @@ impl Workspace {
                     res.extend(file.import_references(import).iter().map(|range| {
                         lsp_types::Location {
                             uri: uri.clone(),
-                            range: to_lsp_range(*range),
+                            range: file.ts_to_lsp_range(*range),
                         }
                     }));
                 }
@@ -406,7 +405,7 @@ impl Workspace {
         }) {
             return Ok(Some(lsp_types::Location {
                 uri,
-                range: to_lsp_range(sym.range),
+                range: file.ts_to_lsp_range(sym.range),
             }));
         }
 
@@ -419,7 +418,7 @@ impl Workspace {
         {
             return Ok(Some(lsp_types::Location {
                 uri,
-                range: to_lsp_range(sym.range),
+                range: file.ts_to_lsp_range(sym.range),
             }));
         };
 
@@ -433,7 +432,7 @@ impl Workspace {
         {
             return Ok(Some(lsp_types::Location {
                 uri,
-                range: to_lsp_range(sym.range),
+                range: file.ts_to_lsp_range(sym.range),
             }));
         };
 
@@ -481,7 +480,7 @@ impl Workspace {
             } {
                 return Ok(Some(lsp_types::Location {
                     uri,
-                    range: to_lsp_range(sym.range),
+                    range: file.ts_to_lsp_range(sym.range),
                 }));
             }
         }
@@ -678,21 +677,7 @@ fn complete_keywords() -> Option<lsp_types::CompletionResponse> {
     Some(lsp_types::CompletionResponse::Array(items.collect()))
 }
 
-fn to_lsp_pos(p: tree_sitter::Point) -> lsp_types::Position {
-    lsp_types::Position {
-        line: p.row.try_into().unwrap(),
-        character: p.column.try_into().unwrap(),
-    }
-}
-
-fn to_lsp_range(r: tree_sitter::Range) -> lsp_types::Range {
-    lsp_types::Range {
-        start: to_lsp_pos(r.start_point),
-        end: to_lsp_pos(r.end_point),
-    }
-}
-
-fn to_lsp_symbol(uri: Url, sym: file::Symbol) -> lsp_types::SymbolInformation {
+fn to_lsp_symbol(uri: Url, sym: file::Symbol, file: &file::File) -> lsp_types::SymbolInformation {
     // deprecated field is deprecated, but cannot be omitted
     #[allow(deprecated)]
     lsp_types::SymbolInformation {
@@ -705,10 +690,7 @@ fn to_lsp_symbol(uri: Url, sym: file::Symbol) -> lsp_types::SymbolInformation {
         deprecated: None,
         location: lsp_types::Location {
             uri,
-            range: lsp_types::Range {
-                start: to_lsp_pos(sym.range.start_point),
-                end: to_lsp_pos(sym.range.end_point),
-            },
+            range: file.ts_to_lsp_range(sym.range),
         },
         container_name: None,
     }
@@ -767,7 +749,7 @@ mod tests {
         let uri = Url::from_file_path(std::env::temp_dir().join("foo.proto")).unwrap();
         ws.open(uri.clone(), "".into()).unwrap();
         assert_eq!(
-            ws.complete(&uri, 0, 0).unwrap().unwrap(),
+            ws.complete(&uri, lsp_types::Position::new(0, 0)).unwrap().unwrap(),
             lsp_types::CompletionResponse::Array(vec![
                 lsp_types::CompletionItem {
                     label: "syntax = \"proto3\";".into(),
@@ -796,7 +778,7 @@ mod tests {
 
         ws.open(uri.clone(), text).unwrap();
         assert_eq!(
-            ws.complete(&uri, 2, "import \"".len()).unwrap().unwrap(),
+            ws.complete(&uri, lsp_types::Position::new(2, "import \"".len() as u32)).unwrap().unwrap(),
             lsp_types::CompletionResponse::Array(vec![lsp_types::CompletionItem {
                 label: "baz.proto".into(),
                 kind: Some(lsp_types::CompletionItemKind::FILE),
@@ -819,7 +801,7 @@ mod tests {
 
         ws.open(uri.clone(), text).unwrap();
 
-        let mut actual = match ws.complete(&uri, 1, "import \"".len()).unwrap().unwrap() {
+        let mut actual = match ws.complete(&uri, lsp_types::Position::new(1, "import \"".len() as u32)).unwrap().unwrap() {
             lsp_types::CompletionResponse::Array(vec) => vec,
             lsp_types::CompletionResponse::List(_) => panic!("Expected array"),
         };
@@ -856,7 +838,7 @@ mod tests {
 
         ws.open(uri.clone(), text).unwrap();
         assert_eq!(
-            ws.complete(&uri, 2, "option j".len()).unwrap().unwrap(),
+            ws.complete(&uri, lsp_types::Position::new(2, "option j".len() as u32)).unwrap().unwrap(),
             lsp_types::CompletionResponse::Array(
                 OPTIONS
                     .iter()
@@ -890,7 +872,7 @@ mod tests {
             ],
         );
         ws.open(uri.clone(), text).unwrap();
-        let result = ws.complete(&uri, 6, "  string d = ".len()).unwrap();
+        let result = ws.complete(&uri, lsp_types::Position::new(6, "  string d = ".len() as u32)).unwrap();
         assert_eq!(
             result,
             Some(lsp_types::CompletionResponse::Array(vec![
@@ -916,7 +898,7 @@ mod tests {
             ],
         );
         ws.open(uri2.clone(), text2).unwrap();
-        let result2 = ws.complete(&uri2, 3, "  string d = ".len()).unwrap();
+        let result2 = ws.complete(&uri2, lsp_types::Position::new(3, "  string d = ".len() as u32)).unwrap();
         assert_eq!(
             result2,
             Some(lsp_types::CompletionResponse::Array(vec![

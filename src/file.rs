@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use ropey::Rope;
 use std::sync::OnceLock;
 use tree_sitter::StreamingIterator;
 
@@ -67,6 +68,7 @@ pub enum GotoContext<'a> {
 pub struct File {
     tree: tree_sitter::Tree,
     text: String,
+    rope: Rope,
 }
 
 impl File {
@@ -78,7 +80,38 @@ impl File {
 
         let tree = parser.parse(&text, None).context("Parse failed")?;
         log::trace!("Parsed: {}", tree.root_node().to_sexp());
-        Ok(File { tree, text })
+        let rope = Rope::from_str(&text);
+        Ok(File { tree, text, rope })
+    }
+
+    /// Convert a tree-sitter Point (row + byte column) to an LSP Position (line + UTF-16 character).
+    pub fn ts_to_lsp_pos(&self, pos: tree_sitter::Point) -> lsp_types::Position {
+        let line = self.rope.line(pos.row);
+        let char_offset = line.byte_to_char(pos.column);
+        let utf16_offset = line.char_to_utf16_cu(char_offset);
+        lsp_types::Position::new(pos.row as u32, utf16_offset as u32)
+    }
+
+    /// Convert an LSP Position (line + UTF-16 character) to a tree-sitter Point (row + byte column).
+    pub fn lsp_to_ts_pos(&self, pos: lsp_types::Position) -> tree_sitter::Point {
+        let line = self.rope.line(pos.line as usize);
+        let char_offset = line.utf16_cu_to_char(pos.character as usize);
+        let byte_offset = line.char_to_byte(char_offset);
+        tree_sitter::Point::new(pos.line as usize, byte_offset)
+    }
+
+    /// Convert a tree-sitter Range to an LSP Range.
+    pub fn ts_to_lsp_range(&self, range: tree_sitter::Range) -> lsp_types::Range {
+        lsp_types::Range {
+            start: self.ts_to_lsp_pos(range.start_point),
+            end: self.ts_to_lsp_pos(range.end_point),
+        }
+    }
+
+    /// Convert an LSP Position to an absolute byte offset in the text.
+    fn lsp_pos_to_byte(&self, pos: lsp_types::Position) -> usize {
+        let point = self.lsp_to_ts_pos(pos);
+        self.rope.line_to_byte(point.row) + point.column
     }
 
     pub fn edit(&mut self, changes: Vec<lsp_types::TextDocumentContentChangeEvent>) -> Result<()> {
@@ -86,32 +119,8 @@ impl File {
             let range = change
                 .range
                 .with_context(|| format!("No range in change notification {change:?}"))?;
-            let mut lines = self.text.split_inclusive("\n").peekable();
-            // First count bytes in all lines preceding the edit.
-            let start_byte = lines
-                .by_ref()
-                .take(range.start.line.try_into()?)
-                .map(str::len)
-                .sum::<usize>();
-            // Now add bytes up to the character within the start line.
-            let start_offset = lines
-                .peek()
-                .map(|line| char_to_byte(line, range.start.character))
-                .unwrap_or(0);
-            let start_byte = start_byte + start_offset;
-            // Now count bytes in all lines following the edit.
-            let end_byte = start_byte
-                + lines
-                    .by_ref()
-                    .take((range.end.line - range.start.line).try_into()?)
-                    .map(str::len)
-                    .sum::<usize>();
-            // Now add bytes up to the character within the end line.
-            let end_offset = lines
-                .peek()
-                .map(|line| char_to_byte(line, range.end.character))
-                .unwrap_or(0);
-            let end_byte = end_byte + end_offset - start_offset;
+            let start_byte = self.lsp_pos_to_byte(range.start);
+            let end_byte = self.lsp_pos_to_byte(range.end);
 
             log::trace!(
                 "Computing change {start_byte}..{end_byte} with text {}",
@@ -119,6 +128,7 @@ impl File {
             );
 
             self.text.replace_range(start_byte..end_byte, &change.text);
+            self.rope = Rope::from_str(&self.text);
         }
         log::trace!("Edited text to: {}", self.text);
 
@@ -443,7 +453,7 @@ impl File {
             //   - field/message_body node: space after '=' lands on a non-ERROR node
             // Check the line before the cursor ends with '=' then walk up for message_body.
             let line = self.text.lines().nth(row).unwrap_or("");
-            let before: String = line.chars().take(col).collect();
+            let before = &line[..col.min(line.len())];
             if before.trim_end().ends_with('=') {
                 self.field_number_completion_context(node)
             } else {
@@ -463,14 +473,12 @@ impl File {
             Some(CompletionContext::Keyword)
         } else if node.kind() == "source_file" {
             // NOTE: Not very efficient, but we're in a difficult spot here.
-            let line: String = self
+            let full_line = self
                 .text
                 .lines()
                 .nth(row)
-                .with_context(|| format!("Line {row} out of range"))?
-                .chars()
-                .take(col)
-                .collect();
+                .with_context(|| format!("Line {row} out of range"))?;
+            let line = &full_line[..col.min(full_line.len())];
             let line = line.trim_start();
 
             log::trace!("Checking keyword completion for line {line}");
@@ -674,12 +682,6 @@ fn is_sexp(node: tree_sitter::Node, sexp: &[&str]) -> bool {
     }
 }
 
-fn char_to_byte(line: &str, char: u32) -> usize {
-    line.chars()
-        .take(char.try_into().unwrap())
-        .map(|c| c.len_utf8())
-        .sum()
-}
 
 #[cfg(test)]
 mod tests {
@@ -1565,7 +1567,9 @@ mod tests {
             }
         };
 
-        file.edit(vec![change((1, 8), (1, 15), "thing")]).unwrap();
+        // 𐐀 (U+10400) is 2 UTF-16 code units, so the 'e' after it is at UTF-16 position 15,
+        // and the '.' after that is at UTF-16 position 16.
+        file.edit(vec![change((1, 8), (1, 16), "thing")]).unwrap();
         assert_eq!(
             file.text,
             [

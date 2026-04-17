@@ -63,11 +63,14 @@ fn parse_diag(diag: &str, file_contents: &str) -> Option<lsp_types::Diagnostic> 
     // Lines from protoc stderr are 1-indexed.
     let lineno = linestr.parse::<u32>().unwrap() - 1;
     let line = file_contents.lines().nth(lineno.try_into().ok()?)?;
-    let start = line.find(|c: char| !c.is_whitespace()).unwrap_or(0);
-    let end = line
+    let start_byte = line.find(|c: char| !c.is_whitespace()).unwrap_or(0);
+    let end_byte = line
         .rfind(|c: char| !c.is_whitespace())
         .map(|c| c + 1) // include the final character
         .unwrap_or(line.len());
+    // Convert byte offsets within the line to UTF-16 code unit counts.
+    let start = line[..start_byte].encode_utf16().count();
+    let end = start + line[start_byte..end_byte].encode_utf16().count();
 
     Some(lsp_types::Diagnostic {
         range: Range {
