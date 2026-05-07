@@ -1,0 +1,189 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [1.1.0](https://github.com/rcorre/pbls/releases/tag/v1.1.0) - 2026-05-07
+
+### Other
+
+- Bump tree-sitter from 0.25.10 to 0.26.8
+- Add utf16 support with ropey.
+- Fix CI.
+- Complete next free field number.
+- Update protobuf/treesitter.
+- Update error messages to latest protoc.
+- Update toolchain with dependabot.
+- Bump the minor-and-patch group with 7 updates
+- Add dependabot.
+- Run clippy.
+- Support completion and goto for RPC types.
+- Update deps
+- Use anyhow.
+- Run release workflow only on tags
+- Add release workflow.
+- Remove TODO
+- Improve goto definition across packages.
+- Fix import completion filtering.
+- Fix goto-references across packages.
+- Add cross-module reference test.
+- Add hosting note to README
+- Handle packages when finding references.
+- Load new imports on file edit.
+- Install protoc to run tests in CI
+- Create rust.yml
+- Add suggested cargo fields.
+- Respect query for workspace symbols.
+- Fix package identification.
+- Handle nested imports.
+- Support warnings, and shell out directly.
+- Update cargo lock version
+- Fix import loop.
+- Update to 1.0.1.
+- Don't crash on bad path config.
+- Demand utf-8 position encoding.
+- Handle utf-8 text.
+- Update to 1.0.0.
+- Don't suggest  completion after oneof.
+- Fix goto for nested types.
+- Add more goto tests.
+- Add goto import tests.
+- Fix parent name order.
+- Update link
+- Find references when cursor is over message name.
+- Implement references.
+- Use env_logger.
+- Load log level from config.
+- Remove text from save notifications.
+- Use replace_range for text edits.
+- Implement option completion.
+- Simplify protoc usage.
+- Offer completion for first import.
+- Fix underflow in edit computations.
+- Add syntax completion.
+- Compute edits more efficiently.
+- Fix integration test.
+- Touch up logging.
+- Add all keywords.
+- Add more edit tests.
+- Handle newlines in edits.
+- Start implementing text edits.
+- Offer whole package for completion.
+- Replace some String with str.
+- Offer module completions.
+- Fix integration test.
+- Adjust type completion based on context.
+- Return fully qualified symbol names.
+- Implement relative_name
+- Trigger type completion more accurately.
+- Update readme.
+- Canonicalize configured paths.
+- Add tests for message completion context.
+- Make keyword completion better.
+- Suggest completions from imported files.
+- Refactor completion into workspace.
+- Remove stray code
+- Change treesitter language.
+- Fix completion tests
+- Make import completion detection more accurate.
+- Fix import completion.
+- Ignore false-positive dead code warning.
+- Add logger.
+- Implement goto import.
+- Remove dead code.
+- Find symbols in imports.
+- Remove dead code.
+- Use treesitter for goto definition.
+- Use statics in file.
+- WIP.
+- Implement type_at.
+- Fix workspace symbols.
+- Implement workspace symbols with TS.
+- WIP.
+- Move file fields to methods.
+- Add range to symbol.
+- Use treesitter queries.
+- wip
+- Use tempfile crate.
+- Enumerate top-level symbols.
+- Get package from treesitter.
+- Add keywords to type completion.
+- Exclude already imported files from import inclusion.
+- Don't suggest current file for import completion.
+- Add test for completion.
+- WIP.
+- Fix save.
+- WIP import completion
+- Implement live completion context.
+- Refactor tree/parser into workspace struct.
+- Add tree type
+- Fix import completion context.
+- Add treesitter awareness to completion.
+- wip
+- Add some treesitter helpers.
+- Add treesitter deps.
+- Add README.
+- Add MIT license.
+- Implement document symbol completion.
+- Add import discovery test.
+- Implement recursive import dir finder.
+- Implement workspace symbols.
+- Implement document diagnostics.
+- Implement document diagnostics
+- Implement notify helper.
+- Add sym helper to tests.
+- Implement parser caching.
+- Clean up test code
+- Fix goto nested messages.
+- Fix diagnostic character ranges.
+- Consolidate common handler code.
+- Add locate helper to tests.
+- Add goto helper in tests.
+- Fix ignores
+- Consolidate test data
+- Cache parse results.
+- Refactor parsing into Parser struct.
+- Ignore order in tests.
+- Implement goto definition across packages.
+- Add dep in other module
+- Implement goto definition across file.
+- Implement workspace symbols.
+- Add import to test.
+- Add goto definition tests
+- Fix parsing single-line spans.
+- Implement single-file go-to definition.
+- Merge branch 'main' of git.sr.ht:~rcorre/pbls
+- Refactor request block to support more requests.
+- Add symbols test.
+- Add diagnostics test
+- Improve test messages
+- Add basic test
+- Refactor for testability
+- Allow missing proto_paths, default to PWD.
+- Configure import paths.
+- Handle error lines without location.
+- Show nested names in symbols.
+- Handle arbitrarily nested messages.
+- Support single nested types
+- Implement document symbols for enums.
+- Implement document symbols for messages.
+- WIP document symbols
+- Improve parsing
+- Clear empty diagnostics.
+- Implement protobuf diagnostics
+- Parse aspell lines.
+- Publish diagnostic.
+- Handle DidOpenTextDocument.
+- Copy lsp_server example.
+- Handle initialize
+- Complete initialize.
+- Respond to request
+- Read msg.
+- Read length header.
+- Read JSON from stdin.
+- Add serde
+- Initial commit.
