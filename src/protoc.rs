@@ -34,10 +34,13 @@ pub fn diags(uri: &Url, text: &str, proto_paths: &[std::path::PathBuf]) -> Resul
         );
 
     log::debug!("Running protoc: {cmd:?}");
-    let output = cmd.output()?;
+    let output = cmd
+        .output()
+        .with_context(|| format!("Failed to execute protoc for {path:?}"))?;
 
     log::debug!("Protoc exited: {output:?}");
-    let stderr = std::str::from_utf8(output.stderr.as_slice())?;
+    let stderr = std::str::from_utf8(output.stderr.as_slice())
+        .with_context(|| format!("Protoc stderr is not valid UTF-8 for {path:?}"))?;
 
     Ok(stderr.lines().filter_map(|l| parse_diag(l, text)).collect())
 }
