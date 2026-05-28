@@ -26,6 +26,7 @@ use lsp_types::{
 };
 use std::fs;
 
+use anyhow::Context;
 pub use anyhow::Result;
 
 #[derive(Debug, serde::Deserialize)]
@@ -54,7 +55,7 @@ where
             result: None,
             error: Some(lsp_server::ResponseError {
                 code: lsp_server::ErrorCode::InternalError as i32,
-                message: err.to_string(),
+                message: format!("{err:#}"),
                 data: None,
             }),
         },
@@ -80,7 +81,7 @@ where
             method: lsp_types::notification::ShowMessage::METHOD.into(),
             params: serde_json::to_value(lsp_types::ShowMessageParams {
                 typ: lsp_types::MessageType::ERROR,
-                message: err.to_string(),
+                message: format!("{err:#}"),
             })?,
         })),
     })
@@ -178,7 +179,10 @@ fn notify_did_change(
 }
 
 fn has_proto_files(path: impl AsRef<std::path::Path>) -> Result<bool> {
-    Ok(std::fs::read_dir(path)?.any(|x| match x {
+    let p = path.as_ref();
+    let mut entries = std::fs::read_dir(p)
+        .with_context(|| format!("Failed to read directory {p:?}"))?;
+    Ok(entries.any(|x| match x {
         Ok(entry) => entry
             .path()
             .extension()
@@ -189,7 +193,9 @@ fn has_proto_files(path: impl AsRef<std::path::Path>) -> Result<bool> {
 
 fn find_dirs(root: std::path::PathBuf) -> Result<Vec<std::path::PathBuf>> {
     let mut res = vec![];
-    for entry in std::fs::read_dir(&root)?.flatten() {
+    let entries = std::fs::read_dir(&root)
+        .with_context(|| format!("Failed to read directory {root:?}"))?;
+    for entry in entries.flatten() {
         if entry.metadata().is_ok_and(|m| m.is_dir()) {
             let mut dirs = find_dirs(entry.path())?;
             res.append(&mut dirs);
@@ -241,23 +247,32 @@ pub fn run(connection: Connection) -> Result<()> {
     .unwrap();
 
     log::info!("Initializing");
-    let init_params = connection.initialize(server_capabilities)?;
-    let params: InitializeParams = serde_json::from_value(init_params).unwrap();
-    let root = params
-        .root_uri
-        .map(|u| u.to_file_path().unwrap())
-        .unwrap_or(std::env::current_dir().unwrap());
+    let init_params = connection
+        .initialize(server_capabilities)
+        .context("Failed during LSP initialization handshake")?;
+    let params: InitializeParams = serde_json::from_value(init_params)
+        .context("Failed to deserialize InitializeParams")?;
+    let root = match params.root_uri {
+        Some(u) => u
+            .to_file_path()
+            .map_err(|_| anyhow::anyhow!("root_uri {u} is not a valid file path"))?,
+        None => std::env::current_dir().context("No current directory")?,
+    };
 
     // TODO: merge config from init params
 
     let path = root.join(".pbls.toml");
     let conf = if path.is_file() {
         log::info!("Reading config from {path:?}");
-        toml::from_str(fs::read_to_string(path)?.as_str())?
+        let config_text = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read config {path:?}"))?;
+        toml::from_str(config_text.as_str())
+            .with_context(|| format!("Failed to parse config {path:?}"))?
     } else {
         log::info!("Using default config");
         Config {
-            proto_paths: find_import_paths(root.clone())?,
+            proto_paths: find_import_paths(root.clone())
+                .with_context(|| format!("Failed to find import paths under {root:?}"))?,
         }
     };
     log::info!("Using config {:?}", conf);
@@ -275,7 +290,7 @@ pub fn run(connection: Connection) -> Result<()> {
         .filter_map(|p| match p.canonicalize() {
             Ok(path) => Some(path),
             Err(err) => {
-                log::warn!("Failed to canonicalize {p:?}: {err}");
+                log::warn!("Failed to canonicalize {p:?}: {err:#}");
                 None
             }
         })
@@ -317,7 +332,7 @@ pub fn run(connection: Connection) -> Result<()> {
                     _ => None,
                 };
                 if let Some(resp) = resp {
-                    connection.sender.send(resp?)?;
+                    connection.sender.send(resp.context("Failed to generate response")?)?;
                 }
             }
             Message::Response(_) => {}

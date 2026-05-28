@@ -117,7 +117,8 @@ impl Workspace {
             return Ok(()); // already parsed
         };
 
-        let text = std::fs::read_to_string(path)?;
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {path:?}"))?;
         let file = file::File::new(text)?;
         let mut qc = tree_sitter::QueryCursor::new();
         let imports: Vec<String> = file
@@ -207,7 +208,7 @@ impl Workspace {
             .filter_map(|p| match std::fs::canonicalize(&p) {
                 Ok(p) => Some(p),
                 Err(err) => {
-                    log::error!("Failed to open '{p:?}': {err:?}");
+                    log::error!("Failed to open '{p:?}': {err:#}");
                     None
                 }
             });
@@ -218,7 +219,8 @@ impl Workspace {
             if let Some(file) = self.files.get(&uri) {
                 file
             } else {
-                let text = std::fs::read_to_string(uri.path())?;
+                let text = std::fs::read_to_string(uri.path())
+                    .with_context(|| format!("Failed to read {}", uri.path()))?;
                 let file = file::File::new(text)?;
                 self.files.insert(uri.clone(), file);
                 self.files.get(&uri).unwrap()
@@ -332,10 +334,17 @@ impl Workspace {
             Some(file::GotoContext::Type(typ)) => self.find_symbol(uri, file, &typ),
             Some(file::GotoContext::Import(name)) => {
                 log::debug!("Looking up import {name:?}");
-                Ok(self.find_import(name).map(|path| lsp_types::Location {
-                    uri: Url::from_file_path(path).unwrap(),
-                    range: lsp_types::Range::default(),
-                }))
+                match self.find_import(name) {
+                    Some(path) => {
+                        let uri = Url::from_file_path(&path)
+                            .map_err(|_| anyhow!("Invalid import path: {path:?}"))?;
+                        Ok(Some(lsp_types::Location {
+                            uri,
+                            range: lsp_types::Range::default(),
+                        }))
+                    }
+                    None => Ok(None),
+                }
             }
         }
     }
@@ -612,7 +621,7 @@ fn find_protos(dir: &std::path::Path) -> Vec<String> {
     let entries = match std::fs::read_dir(dir) {
         Ok(ok) => ok,
         Err(err) => {
-            log::warn!("Failed to read dir {dir:?}: {err:?}");
+            log::warn!("Failed to read dir {dir:?}: {err:#}");
             return res;
         }
     };
@@ -621,7 +630,7 @@ fn find_protos(dir: &std::path::Path) -> Vec<String> {
         let path = match path {
             Ok(ok) => ok,
             Err(err) => {
-                log::warn!("Failed to read dir {dir:?}: {err:?}");
+                log::warn!("Failed to read dir {dir:?}: {err:#}");
                 continue;
             }
         };
@@ -629,7 +638,7 @@ fn find_protos(dir: &std::path::Path) -> Vec<String> {
         let meta = match path.metadata() {
             Ok(ok) => ok,
             Err(err) => {
-                log::warn!("Failed to read dir {dir:?}: {err:?}");
+                log::warn!("Failed to read dir {dir:?}: {err:#}");
                 continue;
             }
         };
