@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2](https://github.com/rcorre/pbls/compare/v1.2.1...v1.2.2) - 2026-05-29
+
+### Fixed
+
+- Add context to errors and format using alt
+
 ## [1.2.1](https://github.com/rcorre/pbls/compare/v1.2.0...v1.2.1) - 2026-05-07
 
 ### Other
